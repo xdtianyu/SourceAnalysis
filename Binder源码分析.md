@@ -91,7 +91,7 @@ protected:
 
 Binder 本地层的整个函数/方法调用过程
 
-![Binder本地函数调用图]()
+![Binder本地函数调用图](https://raw.githubusercontent.com/xdtianyu/SourceAnalysis/master/art/binder_native_stack.png)
 
 1\. Java 层 [IRemoteService.Stub.Proxy](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L147) 调用 [android.os.IBinder (实现在 android.os.Binder.BinderProxy)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/os/Binder.java#L501) 的 `transact()` 发送 `Stub.TRANSACTION_addUser` 命令。
 
