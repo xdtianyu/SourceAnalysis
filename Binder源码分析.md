@@ -46,19 +46,288 @@ Binder JNI 代码是 Binder Java 层操作到 Binder Native 层的接口封装�
 
 Binder 本地层的代码在 [frameworks/native/libs/binder](https://github.com/xdtianyu/android-6.0.0_r1/tree/master/frameworks/native/libs/binder) 目录下， 此目录在 Android 系统编译后会生成 `libbinder.so` 文件，供 JNI 调用。`libbinder` 封装了所有对 binder 驱动的操作，是上层应用与驱动交互的桥梁。头文件则在 [frameworks/native/include/binder](https://github.com/xdtianyu/android-6.0.0_r1/tree/master/frameworks/native/include/binder) 目录下。
 
-Binder 本地层的整个函数/方法调用过程
-
-![Binder本地函数调用图]()
-
 Binder 本地层目录下的几个重要文件：
 
 **IInterface.cpp**
 
-[IInterface.cpp](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IInterface.cpp#L33) 是 Binder 本地层入口文件，与 java 层的 `android.os.IInterface` 对应，提供 `asBinder()` 的实现，向 java 层返回 `IBinder` 对象。
+[IInterface.cpp](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IInterface.cpp#L33) 是 Binder 本地层入口，与 java 层的 `android.os.IInterface` 对应，提供 `asBinder()` 的实现，返回 `IBinder` 对象。
 
-在头文件中有两个类 [BnInterface](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/include/binder/IInterface.h#L50) 和 [BpInterface](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/include/binder/IInterface.h#L63), 分别对应于 java 层的 [Stub](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L19) 和 [Proxy](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L92)
+在头文件中有两个类 [BnInterface (Binder Native Interface)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/include/binder/IInterface.h#L50) 和 [BpInterface (Binder Proxy Interface)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/include/binder/IInterface.h#L63), 对应于 java 层的 [Stub](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L19) 和 [Proxy](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L92)
 
+```
+sp<IBinder> IInterface::asBinder(const IInterface* iface)
+{
+    if (iface == NULL) return NULL;
+    return const_cast<IInterface*>(iface)->onAsBinder();
+}
+```
 
+```
+template<typename INTERFACE>
+class BnInterface : public INTERFACE, public BBinder
+{
+public:
+    virtual sp<IInterface>      queryLocalInterface(const String16& _descriptor);
+    virtual const String16&     getInterfaceDescriptor() const;
+
+protected:
+    virtual IBinder*            onAsBinder();
+};
+
+// ----------------------------------------------------------------------
+
+template<typename INTERFACE>
+class BpInterface : public INTERFACE, public BpRefBase
+{
+public:
+                                BpInterface(const sp<IBinder>& remote);
+
+protected:
+    virtual IBinder*            onAsBinder();
+};
+```
+
+其中 `BnInterface` 是实现Stub功能的模板，扩展BBinder的onTransact()方法实现Binder命令的解析和执行。`BpInterface` 是实现Proxy功能的模板，BpRefBase里有个mRemote对象指向一个BpBinder对象。
+
+Binder 本地层的整个函数/方法调用过程
+
+![Binder本地函数调用图]()
+
+1\. Java 层 [IRemoteService.Stub.Proxy](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L147) 调用 [android.os.IBinder (实现在 android.os.Binder.BinderProxy)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/os/Binder.java#L501) 的 `transact()` 发送 `Stub.TRANSACTION_addUser` 命令。
+
+2\. 由 [BinderProxy.transact()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/os/Binder.java#L507) 进入 native 层。
+
+3\. 由 [jni](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/jni/android_util_Binder.cpp#L1246) 转到 [android_os_BinderProxy_transact()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/jni/android_util_Binder.cpp#L1246) 函数。
+
+4\. 调用 [IBinder->transact](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/jni/android_util_Binder.cpp#L1124) 函数。
+
+```
+static jboolean android_os_BinderProxy_transact(JNIEnv* env, jobject obj,
+        jint code, jobject dataObj, jobject replyObj, jint flags) // throws RemoteException
+{
+    IBinder* target = (IBinder*)
+        env->GetLongField(obj, gBinderProxyOffsets.mObject);
+    status_t err = target->transact(code, *data, reply, flags);
+}
+```
+而 `gBinderProxyOffsets.mObject` 则是在 java 层调用 `IBinder.getContextObject()` 时在 [javaObjectForIBinder](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/jni/android_util_Binder.cpp#L580) 函数中设置的
+
+```
+static jobject android_os_BinderInternal_getContextObject(JNIEnv* env, jobject clazz)
+{
+    sp<IBinder> b = ProcessState::self()->getContextObject(NULL);
+    return javaObjectForIBinder(env, b);
+}
+
+jobject javaObjectForIBinder(JNIEnv* env, const sp<IBinder>& val)
+{
+    ...
+    LOGDEATH("objectForBinder %p: created new proxy %p !\n", val.get(), object);
+    // The proxy holds a reference to the native object.
+    env->SetLongField(object, gBinderProxyOffsets.mObject, (jlong)val.get());
+    val->incStrong((void*)javaObjectForIBinder);
+    ...
+}
+```
+经过 [ProcessState::getContextObject()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/ProcessState.cpp#L85) 和 [ProcessState::getStrongProxyForHandle()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/ProcessState.cpp#L220)
+
+```
+sp<IBinder> ProcessState::getContextObject(const sp<IBinder>& /*caller*/)
+{
+    return getStrongProxyForHandle(0);
+}
+
+sp<IBinder> ProcessState::getStrongProxyForHandle(int32_t handle)
+{
+    sp<IBinder> result;
+    ...
+    b = new BpBinder(handle); 
+    result = b;
+    ...
+    return result;
+}
+```
+
+可见 [android_os_BinderProxy_transact()]() 函数实际上调用的是 [BpBinder::transact()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/BpBinder.cpp#L159) 函数。
+
+5\. [BpBinder::transact()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/BpBinder.cpp#L164) 则又调用了 [IPCThreadState::self()->transact()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L548) 函数。
+
+```
+status_t IPCThreadState::transact(int32_t handle,
+                                  uint32_t code, const Parcel& data,
+                                  Parcel* reply, uint32_t flags)
+{
+    status_t err = data.errorCheck();
+
+    flags |= TF_ACCEPT_FDS;
+    
+    if (err == NO_ERROR) {
+        LOG_ONEWAY(">>>> SEND from pid %d uid %d %s", getpid(), getuid(),
+            (flags & TF_ONE_WAY) == 0 ? "READ REPLY" : "ONE WAY");
+        err = writeTransactionData(BC_TRANSACTION, flags, handle, code, data, NULL);
+    }
+    
+    if ((flags & TF_ONE_WAY) == 0) {
+        if (reply) {
+            err = waitForResponse(reply);
+        } else {
+            Parcel fakeReply;
+            err = waitForResponse(&fakeReply);
+        }
+    } else {
+        err = waitForResponse(NULL, NULL);
+    }
+    
+    return err;
+}
+
+status_t IPCThreadState::writeTransactionData(int32_t cmd, uint32_t binderFlags,
+    int32_t handle, uint32_t code, const Parcel& data, status_t* statusBuffer)
+{
+    binder_transaction_data tr;
+
+    tr.target.ptr = 0; /* Don't pass uninitialized stack data to a remote process */
+    tr.target.handle = handle;
+    tr.code = code;
+    ...
+    
+    mOut.writeInt32(cmd);
+    mOut.write(&tr, sizeof(tr));
+    
+    return NO_ERROR;
+}
+```
+
+由函数内容可以看出， 数据再一次通过 [writeTransactionData()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L904) 传递给 [mOut](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L934) 进行写入操作。 `mOut` 是一个 Parcel 对象， 声明在 [IPCThreadState.h](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/include/binder/IPCThreadState.h#L123) 文件中。之后则调用 [waitForResponse()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L583) 函数。
+
+6\. [IPCThreadState::waitForResponse()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L712) 在一个 `while` 循环里不断的调用 [talkWithDriver()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L803) 并检查是否有数据返回。
+
+```
+status_t IPCThreadState::waitForResponse(Parcel *reply, status_t *acquireResult)
+{
+    uint32_t cmd;
+    int32_t err;
+
+    while (1) {
+        if ((err=talkWithDriver()) < NO_ERROR) break;
+        ...
+        
+        cmd = (uint32_t)mIn.readInt32();
+
+        switch (cmd) {
+        case BR_TRANSACTION_COMPLETE:
+            ...
+        
+        case BR_REPLY:
+            {
+                binder_transaction_data tr;
+                err = mIn.read(&tr, sizeof(tr));
+                ALOG_ASSERT(err == NO_ERROR, "Not enough command data for brREPLY");
+                if (err != NO_ERROR) goto finish;
+
+                if (reply) {
+                    if ((tr.flags & TF_STATUS_CODE) == 0) {
+                        reply->ipcSetDataReference(
+                            reinterpret_cast<const uint8_t*>(tr.data.ptr.buffer),
+                            tr.data_size,
+                            reinterpret_cast<const binder_size_t*>(tr.data.ptr.offsets),
+                            tr.offsets_size/sizeof(binder_size_t),
+                            freeBuffer, this);
+                    } else {
+                        err = *reinterpret_cast<const status_t*>(tr.data.ptr.buffer);
+                        freeBuffer(NULL,
+                            reinterpret_cast<const uint8_t*>(tr.data.ptr.buffer),
+                            tr.data_size,
+                            reinterpret_cast<const binder_size_t*>(tr.data.ptr.offsets),
+                            tr.offsets_size/sizeof(binder_size_t), this);
+                    }
+                } else {
+                    freeBuffer(NULL,
+                        reinterpret_cast<const uint8_t*>(tr.data.ptr.buffer),
+                        tr.data_size,
+                        reinterpret_cast<const binder_size_t*>(tr.data.ptr.offsets),
+                        tr.offsets_size/sizeof(binder_size_t), this);
+                    continue;
+                }
+            }
+            goto finish;
+        }
+    }
+    ...
+}
+```
+
+7\. [IPCThreadState::talkWithDriver](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L803) 函数是真正与 binder 驱动交互的实现。[ioctl(mProcess->mDriverFD, BINDER_WRITE_READ, &bwr)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L856) 就是使用系统调用函数 `ioctl` 向 binder 设备文件 `/dev/binder` 发送 `BINDER_WRITE_READ` 命令。这样就将数据发送给了 Binder 驱动。
+
+```
+status_t IPCThreadState::talkWithDriver(bool doReceive)
+{
+    if (mProcess->mDriverFD <= 0) {
+        return -EBADF;
+    }
+    
+    binder_write_read bwr;
+    
+    // Is the read buffer empty?
+    const bool needRead = mIn.dataPosition() >= mIn.dataSize();
+    
+    // We don't want to write anything if we are still reading
+    // from data left in the input buffer and the caller
+    // has requested to read the next data.
+    const size_t outAvail = (!doReceive || needRead) ? mOut.dataSize() : 0;
+    
+    bwr.write_size = outAvail;
+    bwr.write_buffer = (uintptr_t)mOut.data();
+
+    // This is what we'll read.
+    if (doReceive && needRead) {
+        bwr.read_size = mIn.dataCapacity();
+        bwr.read_buffer = (uintptr_t)mIn.data();
+    } else {
+        bwr.read_size = 0;
+        bwr.read_buffer = 0;
+    }
+    
+    // Return immediately if there is nothing to do.
+    if ((bwr.write_size == 0) && (bwr.read_size == 0)) return NO_ERROR;
+
+    bwr.write_consumed = 0;
+    bwr.read_consumed = 0;
+    status_t err;
+    
+#if defined(HAVE_ANDROID_OS)
+        // 使用系统调用 ioctl 向 /dev/binder 发送 BINDER_WRITE_READ 命令
+        if (ioctl(mProcess->mDriverFD, BINDER_WRITE_READ, &bwr) >= 0)
+            err = NO_ERROR;
+        else
+            err = -errno;
+#else
+        err = INVALID_OPERATION;
+#endif
+    
+    do {
+        if (mProcess->mDriverFD <= 0) {
+            err = -EBADF;
+        }
+    } while (err == -EINTR);
+
+    if (err >= NO_ERROR) {
+        if (bwr.write_consumed > 0) {
+            if (bwr.write_consumed < mOut.dataSize())
+                mOut.remove(0, bwr.write_consumed);
+            else
+                mOut.setDataSize(0);
+        }
+        if (bwr.read_consumed > 0) {
+            mIn.setDataSize(bwr.read_consumed);
+            mIn.setDataPosition(0);
+        }
+        return NO_ERROR;
+    }
+    
+    return err;
+}
+```
 
 **BpBinder.cpp**
 
@@ -357,7 +626,7 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
 * Stub 由 Android Sdk 自动生成，包含对 IBinder 对象操作的封装，需要远程服务实现具体功能。
 
 
-接下来再看具体实现
+接下来再看具体实现， 完整源代码 [AidlExample](https://github.com/xdtianyu/AidlExample)
 
 **AIDL 客户端**
 
