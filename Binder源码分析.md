@@ -54,7 +54,7 @@ Binder 本地层目录下的几个重要文件：
 
 在头文件中有两个类 [BnInterface (Binder Native Interface)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/include/binder/IInterface.h#L50) 和 [BpInterface (Binder Proxy Interface)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/include/binder/IInterface.h#L63), 对应于 java 层的 [Stub](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L19) 和 [Proxy](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L92)
 
-```
+```c++
 sp<IBinder> IInterface::asBinder(const IInterface* iface)
 {
     if (iface == NULL) return NULL;
@@ -62,7 +62,7 @@ sp<IBinder> IInterface::asBinder(const IInterface* iface)
 }
 ```
 
-```
+```c++
 template<typename INTERFACE>
 class BnInterface : public INTERFACE, public BBinder
 {
@@ -101,7 +101,7 @@ Binder 本地层的整个函数/方法调用过程
 
 4\. 调用 [IBinder->transact](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/jni/android_util_Binder.cpp#L1124) 函数。
 
-```
+```c++
 static jboolean android_os_BinderProxy_transact(JNIEnv* env, jobject obj,
         jint code, jobject dataObj, jobject replyObj, jint flags) // throws RemoteException
 {
@@ -112,7 +112,7 @@ static jboolean android_os_BinderProxy_transact(JNIEnv* env, jobject obj,
 ```
 而 `gBinderProxyOffsets.mObject` 则是在 java 层调用 `IBinder.getContextObject()` 时在 [javaObjectForIBinder](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/jni/android_util_Binder.cpp#L580) 函数中设置的
 
-```
+```c++
 static jobject android_os_BinderInternal_getContextObject(JNIEnv* env, jobject clazz)
 {
     sp<IBinder> b = ProcessState::self()->getContextObject(NULL);
@@ -131,7 +131,7 @@ jobject javaObjectForIBinder(JNIEnv* env, const sp<IBinder>& val)
 ```
 经过 [ProcessState::getContextObject()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/ProcessState.cpp#L85) 和 [ProcessState::getStrongProxyForHandle()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/ProcessState.cpp#L220)
 
-```
+```c++
 sp<IBinder> ProcessState::getContextObject(const sp<IBinder>& /*caller*/)
 {
     return getStrongProxyForHandle(0);
@@ -152,7 +152,7 @@ sp<IBinder> ProcessState::getStrongProxyForHandle(int32_t handle)
 
 5\. [BpBinder::transact()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/BpBinder.cpp#L164) 则又调用了 [IPCThreadState::self()->transact()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L548) 函数。
 
-```
+```c++
 status_t IPCThreadState::transact(int32_t handle,
                                   uint32_t code, const Parcel& data,
                                   Parcel* reply, uint32_t flags)
@@ -202,7 +202,7 @@ status_t IPCThreadState::writeTransactionData(int32_t cmd, uint32_t binderFlags,
 
 6\. [IPCThreadState::waitForResponse()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L712) 在一个 `while` 循环里不断的调用 [talkWithDriver()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L803) 并检查是否有数据返回。
 
-```
+```c++
 status_t IPCThreadState::waitForResponse(Parcel *reply, status_t *acquireResult)
 {
     uint32_t cmd;
@@ -252,14 +252,20 @@ status_t IPCThreadState::waitForResponse(Parcel *reply, status_t *acquireResult)
             }
             goto finish;
         }
+        
+        default:
+            err = executeCommand(cmd);
+            if (err != NO_ERROR) goto finish;
+            break;
+        }
     }
     ...
 }
 ```
 
-7\. [IPCThreadState::talkWithDriver](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L803) 函数是真正与 binder 驱动交互的实现。[ioctl(mProcess->mDriverFD, BINDER_WRITE_READ, &bwr)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L856) 就是使用系统调用函数 `ioctl` 向 binder 设备文件 `/dev/binder` 发送 `BINDER_WRITE_READ` 命令。这样就将数据发送给了 Binder 驱动。
+7\. [IPCThreadState::talkWithDriver()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L803) 函数是真正与 binder 驱动交互的实现。[ioctl(mProcess->mDriverFD, BINDER_WRITE_READ, &bwr)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L856) 就是使用系统调用函数 `ioctl` 向 binder 设备文件 `/dev/binder` 发送 `BINDER_WRITE_READ` 命令。
 
-```
+```c++
 status_t IPCThreadState::talkWithDriver(bool doReceive)
 {
     if (mProcess->mDriverFD <= 0) {
@@ -329,13 +335,160 @@ status_t IPCThreadState::talkWithDriver(bool doReceive)
 }
 ```
 
+经过 [IPCThreadState::talkWithDriver()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L718) ,就将数据发送给了 Binder 驱动。
+
+继续追踪 [IPCThreadState::waitForResponse()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L723) ，可以从 第6步 发现 `IPCThreadState` 不断的循环读取 Binder 驱动返回，获取到返回命令后执行了 [executeCommand(cmd)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L787) 函数。
+
+8\. [IPCThreadState::executeCommand()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L947) 处理 Binder 驱动返回命令
+
+```c++
+status_t IPCThreadState::executeCommand(int32_t cmd)
+{
+    BBinder* obj;
+    RefBase::weakref_type* refs;
+    status_t result = NO_ERROR;
+    
+    switch ((uint32_t)cmd) {
+    ...
+    
+    case BR_TRANSACTION:
+        {
+            binder_transaction_data tr;
+            result = mIn.read(&tr, sizeof(tr));
+            ...
+            Parcel buffer;
+            buffer.ipcSetDataReference(
+                reinterpret_cast<const uint8_t*>(tr.data.ptr.buffer),
+                tr.data_size,
+                reinterpret_cast<const binder_size_t*>(tr.data.ptr.offsets),
+                tr.offsets_size/sizeof(binder_size_t), freeBuffer, this);
+            ...
+
+            Parcel reply;
+            status_t error;
+            if (tr.target.ptr) {
+                sp<BBinder> b((BBinder*)tr.cookie);
+                error = b->transact(tr.code, buffer, &reply, tr.flags);
+
+            } else {
+                error = the_context_object->transact(tr.code, buffer, &reply, tr.flags);
+            }
+            ...
+        }
+        break;
+    ...
+}
+```
+
+9\. 可以看出其调用了 [BBinder::transact()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L1085#L1091) 函数，将数据返回给上层。
+
+```c++
+status_t BBinder::transact(
+    uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags)
+{
+    data.setDataPosition(0);
+
+    status_t err = NO_ERROR;
+    switch (code) {
+        case PING_TRANSACTION:
+            reply->writeInt32(pingBinder());
+            break;
+        default:
+            err = onTransact(code, data, reply, flags);
+            break;
+    }
+
+    if (reply != NULL) {
+        reply->setDataPosition(0);
+    }
+
+    return err;
+}
+```
+
+10\. 而这里的 [b->transact(tr.code, buffer, &reply, tr.flags)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L1085#L1091) 中的 `b (BBinder)` 是 [JavaBBinder](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/jni/android_util_Binder.cpp#L217) 的实例，所以会调用 [JavaBBinder::onTransact()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/jni/android_util_Binder.cpp#L247) 函数
+
+```c++
+// frameworks/base/core/jni/android_util_Binder.cpp
+virtual status_t onTransact(
+        uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags = 0)
+    {
+        JNIEnv* env = javavm_to_jnienv(mVM);
+        ...
+        jboolean res = env->CallBooleanMethod(mObject, gBinderOffsets.mExecTransact,
+            code, reinterpret_cast<jlong>(&data), reinterpret_cast<jlong>(reply), flags);
+    }
+    
+static int int_register_android_os_Binder(JNIEnv* env)
+{
+    ...
+    gBinderOffsets.mExecTransact = GetMethodIDOrDie(env, clazz, "execTransact", "(IJJI)Z");
+    ...
+}
+```
+11\. 可见 JNI 通过 [gBinderOffsets.mExecTransact](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/jni/android_util_Binder.cpp#L260) 最后执行了 `android.os.Binder` 的 [execTransact()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/jni/android_util_Binder.cpp#L865) 方法。
+
+[execTransact()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/os/Binder.java#L442) 方法是 jni 回调的入口。
+
+```java
+// Entry point from android_util_Binder.cpp's onTransact
+    private boolean execTransact(int code, long dataObj, long replyObj,
+            int flags) {
+        Parcel data = Parcel.obtain(dataObj);
+        Parcel reply = Parcel.obtain(replyObj);
+        ...
+        try {
+            res = onTransact(code, data, reply, flags);
+        } 
+        ...
+    }
+```
+
+12\. 而我们则在服务端 [IRemoteService.Stub](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L19) 重载了 [onTransact()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L51) 方法，所以数据最后会回到我们的服务端并执行服务端实现的 `addUser()` 方法。
+
+```java
+public static abstract class Stub extends android.os.Binder
+        implements org.xdty.remoteservice.IRemoteService {
+    ...
+    @Override
+    public boolean onTransact(int code, android.os.Parcel data, android.os.Parcel reply,
+            int flags) throws android.os.RemoteException {
+        switch (code) {
+            case INTERFACE_TRANSACTION: {
+                reply.writeString(DESCRIPTOR);
+                return true;
+            }
+            case TRANSACTION_basicTypes: {
+                ...
+                return true;
+            }
+            case TRANSACTION_addUser: {
+                data.enforceInterface(DESCRIPTOR);
+                org.xdty.remoteservice.User _arg0;
+                if ((0 != data.readInt())) {
+                    _arg0 = org.xdty.remoteservice.User.CREATOR.createFromParcel(data);
+                } else {
+                    _arg0 = null;
+                }
+                this.addUser(_arg0);
+                reply.writeNoException();
+                return true;
+            }
+        }
+        return super.onTransact(code, data, reply, flags);
+    }
+}
+```
+
+---------------------------------------
+
 **BpBinder.cpp**
 
 `BpBinder(Base proxy Binder)` 对应于 Java 层的 `Service Proxy`,
 
 先查看头文件 [BpBinder.h](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/include/binder/BpBinder.h) 代码片断
 
-```
+```c++
 class BpBinder : public IBinder
 {
 public:
@@ -359,7 +512,7 @@ public:
 
 可以看到 [BpBinder](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/include/binder/BpBinder.h#L27) 中声明了 `transact()` `linkToDeath()` 等重要函数。再看具体实现
 
-```
+```c++
 status_t BpBinder::transact(
     uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags)
 {
@@ -405,7 +558,7 @@ Binder 驱动的代码位于 kernel 代码的 [drivers/staging/android](https://
 
 进程间传输的数据被成为 Binder 对象，它是一个 [flat_binder_object](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L49),结构如下
 
-```
+```c
 struct flat_binder_object {
     /* 8 bytes for large_flat_header. */
     unsigned long       type;
@@ -423,7 +576,7 @@ struct flat_binder_object {
 ```
 其中 类型 [type](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L29) 描述了 Binder 对象的类型，包含如下三大类(五种)
 
-```
+```c
 enum {
     BINDER_TYPE_BINDER  = B_PACK_CHARS('s', 'b', '*', B_TYPE_LARGE),
     BINDER_TYPE_WEAK_BINDER = B_PACK_CHARS('w', 'b', '*', B_TYPE_LARGE),
@@ -434,7 +587,7 @@ enum {
 ```
 [flags](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L52) 则表述了[传输方式](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L110)，如同步、异步等
 
-```
+```c
 enum transaction_flags {
     TF_ONE_WAY  = 0x01, /* this is a one-way call: async, no return */
     TF_ROOT_OBJECT  = 0x04, /* contents are the component's root object */
@@ -453,7 +606,7 @@ Binder 驱动直接操作的最外层数据结构是 [binder_transaction_data](h
 
 `binder_transaction_data` 数据结构才是真正传输的数据，其定义如下
 
-```
+```c
 struct binder_transaction_data {
     /* The first two are only used for bcTRANSACTION and brTRANSACTION,
      * identifying the target and contents of the transaction.
@@ -495,7 +648,7 @@ struct binder_transaction_data {
 
 查看 [device_initcall()](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3704) 函数
 
-```
+```c
 static struct miscdevice binder_miscdev = {
     .minor = MISC_DYNAMIC_MINOR,
     .name = "binder",
@@ -515,7 +668,7 @@ device_initcall(binder_init);
 
 我们从 [misc_register(&binder_miscdev);](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3716) 及 [.name = "binder"](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3695) 可以看到， binder 向 kernel 注册了一个 `/dev/binder` 的字符设备，而文件操作都在 [binder_fops](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3683) 结构体中。
 
-```
+```c
 static const struct file_operations binder_fops = {
     .owner = THIS_MODULE,
     .poll = binder_poll,
@@ -534,7 +687,7 @@ static const struct file_operations binder_fops = {
 
 首先在 [enum](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L29) 中定义了 binder 处理的类型，引用或是句柄
 
-```
+```c
 enum {
     BINDER_TYPE_BINDER  = B_PACK_CHARS('s', 'b', '*', B_TYPE_LARGE),
     BINDER_TYPE_WEAK_BINDER = B_PACK_CHARS('w', 'b', '*', B_TYPE_LARGE),
@@ -545,7 +698,7 @@ enum {
 ```
 下面这段宏定义则是在 `ioctl` 函数调用时可用的具体命令。
 
-```
+```c
 #define BINDER_WRITE_READ       _IOWR('b', 1, struct binder_write_read)
 #define BINDER_SET_IDLE_TIMEOUT     _IOW('b', 3, int64_t)
 #define BINDER_SET_MAX_THREADS      _IOW('b', 5, size_t)
@@ -566,7 +719,7 @@ enum {
 
 Binder 在头文件中只要定义了两个数据类型, 一个是 `binder_write_read`
 
-```
+```c
 struct binder_write_read {
     signed long write_size; /* bytes to write */
     signed long write_consumed; /* bytes consumed by driver */
@@ -579,7 +732,7 @@ struct binder_write_read {
 
 以及 `binder_transaction_data`
 
-```
+```c
 struct binder_transaction_data {
     /* The first two are only used for bcTRANSACTION and brTRANSACTION,
      * identifying the target and contents of the transaction.
@@ -634,6 +787,7 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
 
 `IRemoteService.aidl` 示例
 
+```java
     // IRemoteService.aidl
     package com.android.aidltest;
     
@@ -642,6 +796,7 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
         void basicTypes(int anInt, long aLong, boolean aBoolean, float aFloat,
                 double aDouble, String aString);
     }
+```
 
 从生成的示例代码可以看出，AIDL 的语法类似 Java， 我们传递的参数只能是基本类型。
 
@@ -651,6 +806,7 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
 
 `User.java` 示例
 
+```java
     public class User implements Parcelable {
 
         private int uid;
@@ -683,8 +839,11 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
         }
     }
     
+```
+
 再向 `IRemoteService.aidl` 中添加一个 `addUser()` 方法，同时新建一个 `User.aidl` 文件。
 
+```java
     // IRemoteService.aidl
     package com.android.aidltest;
     
@@ -703,11 +862,12 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
     package com.android.aidltest;
     parcelable User;
     
+```
 运行编译后，会在 `generated` 文件夹中生成一个 [IRemoteService.java](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L92) 接口文件。这个接口中有两个内部类 [Stub](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L19) 和 [Stub.Proxy](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L92)。
 
 客户端会从 [Stub.asInterface()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L34) 得到 `IRemoteService (Stub.Proxy)` 的实例，这个实例就是一个通过 Binder 传递回来的 [远程对象](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L93) 的再包装。而服务端则需要实现 [IRemoteService.addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L15) 方法。
 
-```
+```java
         public static org.xdty.remoteservice.IRemoteService asInterface(android.os.IBinder obj) {
             if ((obj == null)) {
                 return null;
@@ -727,7 +887,8 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
 按客户端的结构新建 `IRemoteService.aidl` `User.aidl` `User.java` 文件，并拷贝内容，注意如果需要请修改包名。
 
 新建服务 `RemoteService` 并在 `onBind()` 时返回 `IRemoteService.Stub` 实例：
-    
+  
+```java
     public class RemoteService extends Service {
         @Nullable
         @Override
@@ -748,12 +909,13 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
             }
         };
     }
+```
 
 这样服务端就实现了 [addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L15) 方法，当客户端通过远程对象调用 [IRemoteService.Stub.Proxy.addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L135) 时，远程对象 [mRemote](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L147) 就会通过 [transact()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L147) 发送命令给服务端，服务端收到命令后在 [Stub.onTransact()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L76) 中读取数据并执行 [addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L84) 操作。
 
 远程 Binder 对象 [mRemote](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L42) 是由客户端绑定服务时 [onServiceConnected()](https://github.com/xdtianyu/AidlExample/blob/master/app/src/main/java/org/xdty/aidlexample/MainActivity.java#L23) 返回的。继续追踪 [bindService()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/ContextImpl.java#L1283)
 
-```
+```java
     @Override
     public boolean bindService(Intent service, ServiceConnection conn,
             int flags) {
@@ -764,7 +926,7 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
 
 可以看到最后是 [ActivityManagerNative.getDefault().bindService()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/ContextImpl.java#L1317#L1320) 来绑定服务
 
-```
+```java
     // bindServiceCommon()
     int res = ActivityManagerNative.getDefault().bindService(
         mMainThread.getApplicationThread(), getActivityToken(), service,
@@ -808,13 +970,16 @@ Android 系统在启动后会在后台运行很多系统服务提供给应用使
 
 追踪 [ContextImpl](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/ContextImpl.java#L1364) `getSystemService()` 源代码
 
+```java
     @Override
     public Object getSystemService(String name) {
         return SystemServiceRegistry.getSystemService(this, name);
     }
-    
+```
+
 继续追踪 [SystemServiceRegistry](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/SystemServiceRegistry.java#L719) 源代码
 
+```java
     /**
      * Gets a system service from a given context.
      */
@@ -822,9 +987,11 @@ Android 系统在启动后会在后台运行很多系统服务提供给应用使
         ServiceFetcher<?> fetcher = SYSTEM_SERVICE_FETCHERS.get(name);
         return fetcher != null ? fetcher.getService(ctx) : null;
     }
-    
+```
+
 追踪 `SYSTEM_SERVICE_FETCHERS` 可以发现在 [SystemServiceRegistry](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/SystemServiceRegistry.java#L318) 静态区中注册了几乎所有的系统服务
 
+```java
     registerService(Context.LAYOUT_INFLATER_SERVICE, LayoutInflater.class,
             new CachedServiceFetcher<LayoutInflater>() {
         @Override
@@ -839,12 +1006,13 @@ Android 系统在启动后会在后台运行很多系统服务提供给应用使
             IBinder b = ServiceManager.getService(Context.LOCATION_SERVICE);
             return new LocationManager(ctx, ILocationManager.Stub.asInterface(b));
         }});
+```
 
 上面代码片断中，[PhoneLayoutInflater](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/SystemServiceRegistry.java#L322) 最终回到了 [LayoutInflater](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/view/LayoutInflater.java#L204)。而 [LocationManager](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/location/java/android/location/LocationManager.java#L315) 则是对 [ILocationManager](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/location/java/android/location/ILocationManager.aidl#L39) 的封装。可以发现，在 [frameworks/base/location/java/android/location](https://github.com/xdtianyu/android-6.0.0_r1/tree/master/frameworks/base/location/java/android/location) 包下含有大量的 AIDL 文件。
 
 继续追踪 [ServiceManager.getService(Context.LOCATION_SERVICE)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/os/ServiceManager.java#L49) 
 
-
+```java
     private static IServiceManager getIServiceManager() {
         if (sServiceManager != null) {
             return sServiceManager;
@@ -874,12 +1042,13 @@ Android 系统在启动后会在后台运行很多系统服务提供给应用使
         }
         return null;
     }
-
+```
     
 从上面代码片断可以看出，`ServiceManager` 会从 `sCache` 缓存或 [IServiceManager](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/os/ServiceManagerNative.java#L33) 中查找服务并返回一个 [IBinder](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/os/IBinder.java#L85) 对象。这个 `IBinder` 就是一个远程对象，可以通过它与其他进程交互。 
 
 继续深入 [getIServiceManager().getService(name)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/os/ServiceManager.java#L55) , 进入 [ServiceManagerNative](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/os/ServiceManagerNative.java#L33) 
 
+```java
     /**
      * Cast a Binder object into a service manager interface, generating
      * a proxy if needed.
@@ -921,7 +1090,8 @@ Android 系统在启动后会在后台运行很多系统服务提供给应用使
         
         private IBinder mRemote;
     }
-    
+```
+
 从上边代码片断可以看到，`ServiceManager.getIServiceManager()` 返回的是一个 `ServiceManagerProxy`, 而 `ServiceManager.getService()` 则是在 `ServiceManagerProxy` 中通过 `ServiceManager` 的远程 `Binder` 对象 `mRemote`，操作 `Parcel` 数据，调用 [IBinder.transact(int code, Parcel data, Parcel reply, int flags)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/os/IBinder.java#L223) 方法来发送请求，并通过 `reply.readStrongBinder()` 返回了要查找的服务的远程对象。
 
 可以看到，系统服务的获取方式也是通过 AIDL 的方式实现的。
