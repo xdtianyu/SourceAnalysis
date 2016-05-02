@@ -9,6 +9,9 @@
   - [2.1 AIDL 客户端](#21-aidl-%E5%AE%A2%E6%88%B7%E7%AB%AF)
   - [2.2 AIDL 服务端](#22-aidl-%E6%9C%8D%E5%8A%A1%E7%AB%AF)
 - [3. Binder 框架及 Native 层](#3-binder-%E6%A1%86%E6%9E%B6%E5%8F%8A-native-%E5%B1%82)
+  - [3.1 Binder Native 的入口](#31-binder-native-%E7%9A%84%E5%85%A5%E5%8F%A3)
+  - [3.2 Binder 本地层的整个函数/方法调用过程](#32-binder-%E6%9C%AC%E5%9C%B0%E5%B1%82%E7%9A%84%E6%95%B4%E4%B8%AA%E5%87%BD%E6%95%B0%E6%96%B9%E6%B3%95%E8%B0%83%E7%94%A8%E8%BF%87%E7%A8%8B)
+  - [3.3 Binder 设备文件的打开和读写](#33-binder-%E8%AE%BE%E5%A4%87%E6%96%87%E4%BB%B6%E7%9A%84%E6%89%93%E5%BC%80%E5%92%8C%E8%AF%BB%E5%86%99)
 - [4. Binder 驱动](#4-binder-%E9%A9%B1%E5%8A%A8)
 - [5. Binder 与系统服务](#5-binder-%E4%B8%8E%E7%B3%BB%E7%BB%9F%E6%9C%8D%E5%8A%A1)
   - [5.1 Context.getSystemService()](#51-contextgetsystemservice)
@@ -44,9 +47,7 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
 
 ### 2.1 AIDL 客户端
 
-在 Android Studio 项目上右键， `New` -> `AIDL` -> `AIDL File` 输入文件名后可以快速创建一个 AIDL 的代码结构。
-
-`IRemoteService.aidl` 示例
+在 Android Studio 项目上右键， `New` -> `AIDL` -> `AIDL File` 输入文件名后可以快速创建一个 AIDL 的代码结构。例如我们新建一个 `IRemoteService.aidl` 文件
 
 ```java
 // IRemoteService.aidl
@@ -65,9 +66,8 @@ interface IRemoteService {
 
 这样类 `User` 的实例就可以储存到 [Parcel](http://developer.android.com/reference/android/os/Parcel.html) 中，而 `Parcel` 则是一个可以通过 `IBinder` 发送数据或对象引用的容器。
 
-`User.java` 示例
-
 ```java
+// User.java
 public class User implements Parcelable {
 
     private int uid;
@@ -122,11 +122,12 @@ interface IRemoteService {
 package com.android.aidltest;
 parcelable User;
 ```
-运行编译后，会在 `generated` 文件夹中生成一个 [IRemoteService.java](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L92) 接口文件。这个接口中有两个内部类 [Stub](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L19) 和 [Stub.Proxy](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L92)。
+运行编译后，会在 `generated` 文件夹中生成一个 [IRemoteService.java](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L92) 接口文件。这个接口中有两个内部类 [Stub](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L19) 和 [Stub.Proxy](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L92)。注意客户端生成的`IRemoteService.java` 文件和在后文服务端生成的文件内容是相同的。
 
 客户端会从 [Stub.asInterface()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L34) 得到 `IRemoteService (Stub.Proxy)` 的实例，这个实例就是一个通过 Binder 传递回来的 [远程对象](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L93) 的包装。而服务端则需要实现 [IRemoteService.addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L15) 方法。
 
 ```java
+// IRemoteService.java
 public static org.xdty.remoteservice.IRemoteService asInterface(android.os.IBinder obj) {
     if ((obj == null)) {
         return null;
@@ -148,6 +149,7 @@ public static org.xdty.remoteservice.IRemoteService asInterface(android.os.IBind
 新建服务 [RemoteService](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/java/org/xdty/remoteservice/RemoteService.java#L29) `onBind()` 时返回 `IRemoteService.Stub` 实例：
   
 ```java
+// RemoteService.java
 public class RemoteService extends Service {
     @Nullable
     @Override
@@ -251,9 +253,7 @@ Binder JNI 代码是 Binder Java 层操作到 Binder Native 层的接口封装�
 
 Binder 本地层的代码在 [frameworks/native/libs/binder](https://github.com/xdtianyu/android-6.0.0_r1/tree/master/frameworks/native/libs/binder) 目录下， 此目录在 Android 系统编译后会生成 `libbinder.so` 文件，供 JNI 调用。`libbinder` 封装了所有对 binder 驱动的操作，是上层应用与驱动交互的桥梁。头文件则在 [frameworks/native/include/binder](https://github.com/xdtianyu/android-6.0.0_r1/tree/master/frameworks/native/include/binder) 目录下。
 
-Binder 本地层目录下的几个重要文件：
-
-**IInterface.cpp**
+### 3.1 Binder Native 的入口
 
 [IInterface.cpp](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IInterface.cpp#L33) 是 Binder 本地层入口，与 java 层的 `android.os.IInterface` 对应，提供 `asBinder()` 的实现，返回 `IBinder` 对象。
 
@@ -294,7 +294,7 @@ protected:
 
 其中 `BnInterface` 是实现Stub功能的模板，扩展BBinder的onTransact()方法实现Binder命令的解析和执行。`BpInterface` 是实现Proxy功能的模板，BpRefBase里有个mRemote对象指向一个BpBinder对象。
 
-Binder 本地层的整个函数/方法调用过程
+### 3.2 Binder 本地层的整个函数/方法调用过程
 
 ![Binder本地函数调用图](https://raw.githubusercontent.com/xdtianyu/SourceAnalysis/master/art/binder_native_stack.png)
 
@@ -685,6 +685,95 @@ public static abstract class Stub extends android.os.Binder
 }
 ```
 
+### 3.3 Binder 设备文件的打开和读写
+
+**设备的打开**
+
+在上一小节中我们看到 JNI 过程中调用了 `ProcessState::getContextObject()` 函数， 在 [ProcessState](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/ProcessState.cpp#L340) 初始化时会打开 binder 设备
+
+```c++
+// ProcessState.cpp
+ProcessState::ProcessState()
+    : mDriverFD(open_driver())
+    ...
+{
+    ...
+}
+```
+
+[open_driver()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/ProcessState.cpp#L311#L337) 函数内容如下
+
+```c++
+// ProcessState.cpp
+static int open_driver()
+{
+    // 打开设备文件
+    int fd = open("/dev/binder", O_RDWR);
+    if (fd >= 0) {
+        fcntl(fd, F_SETFD, FD_CLOEXEC);
+        int vers = 0;
+        // 获取驱动版本
+        status_t result = ioctl(fd, BINDER_VERSION, &vers);
+        if (result == -1) {
+            ALOGE("Binder ioctl to obtain version failed: %s", strerror(errno));
+            close(fd);
+            fd = -1;
+        }
+        // 检查驱动版本是否一致
+        if (result != 0 || vers != BINDER_CURRENT_PROTOCOL_VERSION) {
+            ALOGE("Binder driver protocol does not match user space protocol!");
+            close(fd);
+            fd = -1;
+        }
+        // 设置最多 15 个 binder 线程
+        size_t maxThreads = DEFAULT_MAX_BINDER_THREADS;
+        result = ioctl(fd, BINDER_SET_MAX_THREADS, &maxThreads);
+        if (result == -1) {
+            ALOGE("Binder ioctl to set max threads failed: %s", strerror(errno));
+        }
+    } else {
+        ALOGW("Opening '/dev/binder' failed: %s\n", strerror(errno));
+    }
+    return fd;
+}
+```
+
+**设备的读写**
+
+打开设备文件后，文件描述符被保存在 [mDriverFD](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/ProcessState.cpp#L340)， 通过系统调用 `ioctl` 函数操作 `mDriverFD` 就可以实现和 binder 驱动的交互。
+
+对 Binder 设备文件的所有读写及关闭操作则都在 [IPCThreadState](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L805)中，如上一小节提及到的 [IPCThreadState::talkWithDriver](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L803) 函数
+
+`talkWithDriver()` 函数封装了 `BINDER_WRITE_READ` 命令，会向 binder 驱动写入或从驱动读取封装在 [binder_write_read](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L856) 结构体中的本地或远程对象。
+
+```c++
+// IPCThreadState.cpp
+status_t IPCThreadState::talkWithDriver(bool doReceive)
+{   
+    binder_write_read bwr;
+    const bool needRead = mIn.dataPosition() >= mIn.dataSize();
+    const size_t outAvail = (!doReceive || needRead) ? mOut.dataSize() : 0;
+    
+    // 写入数据
+    bwr.write_size = outAvail;
+    bwr.write_buffer = (uintptr_t)mOut.data();
+
+    // 读取数据
+    if (doReceive && needRead) {
+        bwr.read_size = mIn.dataCapacity();
+        bwr.read_buffer = (uintptr_t)mIn.data();
+    } else {
+        bwr.read_size = 0;
+        bwr.read_buffer = 0;
+    }
+    ...
+    // 使用 ioctl 系统调用发送 BINDER_WRITE_READ 命令到 biner 驱动
+    if (ioctl(mProcess->mDriverFD, BINDER_WRITE_READ, &bwr) >= 0)
+        err = NO_ERROR;
+    ...
+}
+```
+
 ---------------------------------------
 
 **BpBinder.cpp**
@@ -751,6 +840,7 @@ status_t BpBinder::linkToDeath(
 
 [APPOpsManager (APP Operation Manager)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/AppOpsManager.cpp) 是 应用操作管理者，实现对客户端操作的检查、启动、完成等。
 
+-----------------------------
 
 ## 4. Binder 驱动
 
@@ -760,7 +850,11 @@ Binder 驱动是 Binder 的最终实现， ServiceManager 和 Client/Service 进
 
 Binder 驱动的代码位于 kernel 代码的 [drivers/staging/android](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/tree/master/drivers/staging/android) 目录下。主文件是 [binder.h](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h) 和 [binder.c](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c)
 
-进程间传输的数据被成为 Binder 对象，它是一个 [flat_binder_object](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L49),结构如下
+Binder 驱动的逻辑图
+
+![Binder driver]()
+
+进程间传输的数据被称为 Binder 对象，它是一个 [flat_binder_object](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L49)，结构如下
 
 ```c
 struct flat_binder_object {
@@ -778,7 +872,7 @@ struct flat_binder_object {
     void            *cookie;
 };
 ```
-其中 类型 [type](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L29) 描述了 Binder 对象的类型，包含如下三大类(五种)
+其中 类型 [type](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L29) 描述了 Binder 对象的类型，包含 `BINDER`(本地对象)、`HANDLE`(远程对象)、 `FD` 三大类(五种)
 
 ```c
 enum {
@@ -789,7 +883,7 @@ enum {
     BINDER_TYPE_FD      = B_PACK_CHARS('f', 'd', '*', B_TYPE_LARGE),
 };
 ```
-[flags](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L52) 则表述了[传输方式](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L110)，如同步、异步等
+[flags](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L52) 则表述了[传输方式](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L110)，如异步、无返回等
 
 ```c
 enum transaction_flags {
@@ -804,7 +898,7 @@ enum transaction_flags {
 
 当 `flat_binder_object` 在进程间传递时， Binder 驱动会修改它的类型和数据，交换的代码参考 [binder_transaction](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L1671) 的实现。
 
-该如何理解本地 `BINDER` 对象和远程 `HANDLE` 对象呢？其实它们都代表同一个对象，不过是从不同的角度来看。举例来说，假如进程 A 有个对象 a，对于 A 来说，a 就是一个本地的 `BINDER` 对象；如果进程 B 通过 Binder 驱动访问 A 的 a 对象，对于 B 来说，a 就是一个 `HANDLE`。因此，从根本上来说 handle 和 binder 都指向 a。本地对象还可以带有额外的数据，保存在 [cookie](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L61) 中。
+该如何理解本地 `BINDER` 对象和远程 `HANDLE` 对象呢？其实它们都代表同一个对象，不过是从不同的角度来看。举例来说，假如进程 `RemoteService` 有个对象 [mBinder](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/java/org/xdty/remoteservice/RemoteService.java#L11)，对于 `RemoteService` 来说，`mBinder` 就是一个本地的 `BINDER` 对象；如果进程 `app` 通过 Binder 驱动访问 `RemoteService` 的 `mBinder` 对象，对于 `app` 来说， `mBinder` 就是一个 `HANDLE`。因此，从根本上来说 `handle` 和 `binder` 都指向 `RemoteService` 的 `mBinder`。本地对象还可以带有额外的数据，保存在 [cookie](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L61) 中。
 
 Binder 驱动直接操作的最外层数据结构是 [binder_transaction_data](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L117)， Binder 对象 `flat_binder_object` 被封装在 [binder_transaction_data](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L142) 结构体中。
 
@@ -848,9 +942,9 @@ struct binder_transaction_data {
 `flat_binder_object` 就被封装在 [*buffer](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L142)中，其中的 [unsigned int   code;](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L126) 则是传输命令，描述了 Binder 对象执行的操作。
 
 
-**binder 设备的创建**
+**1. binder 设备的创建**
 
-查看 [device_initcall()](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3704) 函数
+[device_initcall()](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3747) 函数是内核加载驱动的入口函数，我们先来看这个函数的调用过程。
 
 ```c
 static struct miscdevice binder_miscdev = {
@@ -862,15 +956,15 @@ static struct miscdevice binder_miscdev = {
 static int __init binder_init(void)
 {
     int ret;
-
+    ...
     ret = misc_register(&binder_miscdev);
+    ...
     return ret;
 }
 
 device_initcall(binder_init);
 ```
-
-我们从 [misc_register(&binder_miscdev);](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3716) 及 [.name = "binder"](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3695) 可以看到， binder 向 kernel 注册了一个 `/dev/binder` 的字符设备，而文件操作都在 [binder_fops](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3683) 结构体中。
+可以看出 [binder_init()](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3704) 使用 `misc_register()` 函数创建了 binder 设备。从 [misc_register(&binder_miscdev);](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3716) 及 [.name = "binder"](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3695) 可以看出， binder 向 kernel 注册了一个 `/dev/binder` 的字符设备，而文件操作都在 [binder_fops](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3683) 结构体中定义。
 
 ```c
 static const struct file_operations binder_fops = {
@@ -883,7 +977,11 @@ static const struct file_operations binder_fops = {
     .release = binder_release,
 };
 ```
-从此结构体可以看出，主要的操作是 `binder_ioctl()` `binder_mmap()` 函数实现的。
+从上面 `binder_fops` 结构体可以看出，主要的操作是 `binder_ioctl()` `binder_mmap()` `binder_open()` 等函数实现的。
+
+**2. ServiceManager 服务的注册**
+
+
 
 **binder协议和数据结构**
 
