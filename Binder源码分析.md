@@ -5,12 +5,12 @@
 **目录**
 
 - [1. 简介](#1-%E7%AE%80%E4%BB%8B)
-- [2. Binder与AIDL](#2-binder%E4%B8%8Eaidl)
+- [2. Binder 与 AIDL](#2-binder-%E4%B8%8E-aidl)
   - [2.1 AIDL 客户端](#21-aidl-%E5%AE%A2%E6%88%B7%E7%AB%AF)
-  - [2.2 AIDL服务端](#22-aidl%E6%9C%8D%E5%8A%A1%E7%AB%AF)
-- [3. Binder框架及Native层](#3-binder%E6%A1%86%E6%9E%B6%E5%8F%8Anative%E5%B1%82)
-- [4. Binder驱动](#4-binder%E9%A9%B1%E5%8A%A8)
-- [5. Binder与系统服务](#5-binder%E4%B8%8E%E7%B3%BB%E7%BB%9F%E6%9C%8D%E5%8A%A1)
+  - [2.2 AIDL 服务端](#22-aidl-%E6%9C%8D%E5%8A%A1%E7%AB%AF)
+- [3. Binder 框架及 Native 层](#3-binder-%E6%A1%86%E6%9E%B6%E5%8F%8A-native-%E5%B1%82)
+- [4. Binder 驱动](#4-binder-%E9%A9%B1%E5%8A%A8)
+- [5. Binder 与系统服务](#5-binder-%E4%B8%8E%E7%B3%BB%E7%BB%9F%E6%9C%8D%E5%8A%A1)
   - [5.1 Context.getSystemService()](#51-contextgetsystemservice)
   - [5.2 Context.getSystemService() 源码分析](#52-contextgetsystemservice-%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90)
 - [6. 背景](#6-%E8%83%8C%E6%99%AF)
@@ -29,18 +29,18 @@ Binder 是非常重要的 Android 基础组件，几乎所有的进程间通信�
 
 我们经常使用的 Intent，Messager 数据传递也是对 Binder 更高层次的抽象和封装，最终还是会由内核中的 binder 驱动完成数据的传递。
 
-## 2. Binder与AIDL
+## 2. Binder 与 AIDL
 
 AIDL (Android Interface definition language) 是接口描述语言，用于生成在两个进程间进行通信的代码。先看 AIDL 概念图
 
 ![AIDL概念图](https://raw.githubusercontent.com/xdtianyu/SourceAnalysis/master/art/AIDL.png)
 
-* Proxy 由 Android Sdk 自动生成，客户端通过 Proxy 与远程服务交互。
+* Stub.Proxy 和 Stub 代码由 Android Sdk 自动生成，客户端通过 Stub.Proxy 与远程服务交互。
 
-* Stub 由 Android Sdk 自动生成，包含对 IBinder 对象操作的封装，需要远程服务实现具体功能。
+* Stub 包含对 IBinder 对象操作的封装，需要远程服务实现具体功能。
 
 
-接下来再看具体实现， 完整源代码 [AidlExample](https://github.com/xdtianyu/AidlExample)
+接下来再看具体实现， 完整源代码见 [AidlExample](https://github.com/xdtianyu/AidlExample)。在这个工程中，我们新建了两个应用， `app` 是客户端代码， `remoteservice` 则是服务端代码。
 
 ### 2.1 AIDL 客户端
 
@@ -49,162 +49,184 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
 `IRemoteService.aidl` 示例
 
 ```java
-    // IRemoteService.aidl
-    package com.android.aidltest;
-    
-    interface IRemoteService {
-    
-        void basicTypes(int anInt, long aLong, boolean aBoolean, float aFloat,
-                double aDouble, String aString);
-    }
+// IRemoteService.aidl
+package com.android.aidltest;
+
+interface IRemoteService {
+
+    void basicTypes(int anInt, long aLong, boolean aBoolean, float aFloat,
+            double aDouble, String aString);
+}
 ```
 
-从生成的示例代码可以看出，AIDL 的语法类似 Java， 我们传递的参数只能是基本类型。
+从生成的示例代码可以看出，AIDL 的语法类似 Java， `basicTypes()` 方法传递的参数只是基本类型。
 
-如果要传递自定义类型如 `User`，则需要实现 [Parcelable](http://developer.android.com/reference/android/os/Parcelable.html) 接口。`Parcelable` 是一个与 Java `Serializable` 类似的序列化接口。 
+如果要传递自定义类型如 [User](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/java/org/xdty/remoteservice/User.java#L6)，则需要实现 [Parcelable](http://developer.android.com/reference/android/os/Parcelable.html) 接口。`Parcelable` 是一个与 Java `Serializable` 类似的序列化接口。 
 
 这样类 `User` 的实例就可以储存到 [Parcel](http://developer.android.com/reference/android/os/Parcel.html) 中，而 `Parcel` 则是一个可以通过 `IBinder` 发送数据或对象引用的容器。
 
 `User.java` 示例
 
 ```java
-    public class User implements Parcelable {
+public class User implements Parcelable {
 
-        private int uid;
-        private String name;
+    private int uid;
+    private String name;
 
-        // 从 Parcel 中读取数据，顺序需要和写入保持一致
-        protected User(Parcel in) {
-            uid = in.readInt();
-            name = in.readString();
-        }
-
-        // 必须实现，用于从 Parcel 对象中生成类实例
-        public static final Creator<User> CREATOR = new Creator<User>() {
-            @Override
-            public User createFromParcel(Parcel in) {
-                return new User(in);
-            }
-
-            @Override
-            public User[] newArray(int size) {
-                return new User[size];
-            }
-        };
-
-        // 将数据写入到 Parcel 中， 顺序需要与读取保持一致
-        @Override
-        public void writeToParcel(Parcel dest, int flags) {
-            dest.writeInt(uid);
-            dest.writeString(name);
-        }
+    // 从 Parcel 中读取数据，顺序需要和写入保持一致
+    protected User(Parcel in) {
+        uid = in.readInt();
+        name = in.readString();
     }
-    
+
+    // 必须实现，用于从 Parcel 对象中生成类实例
+    public static final Creator<User> CREATOR = new Creator<User>() {
+        @Override
+        public User createFromParcel(Parcel in) {
+            return new User(in);
+        }
+
+        @Override
+        public User[] newArray(int size) {
+            return new User[size];
+        }
+    };
+
+    // 将数据写入到 Parcel 中， 顺序需要与读取保持一致
+    @Override
+    public void writeToParcel(Parcel dest, int flags) {
+        dest.writeInt(uid);
+        dest.writeString(name);
+    }
+}
 ```
 
 再向 `IRemoteService.aidl` 中添加一个 `addUser()` 方法，同时新建一个 `User.aidl` 文件。
 
 ```java
-    // IRemoteService.aidl
-    package com.android.aidltest;
-    
-    import com.android.aidltest.User;
-    
-    interface IRemoteService {
-    
-        void basicTypes(int anInt, long aLong, boolean aBoolean, float aFloat,
-                double aDouble, String aString);
-    
-        // in 表示传入数据， out 表示传出数据， inout 表示双向传递。注意含有 out 时 User 类需要实现 readFromParcel() 方法
-        void addUser(in User user);
-    }
+// IRemoteService.aidl
+package com.android.aidltest;
 
-    // User.aidl
-    package com.android.aidltest;
-    parcelable User;
-    
+import com.android.aidltest.User;
+
+interface IRemoteService {
+
+    void basicTypes(int anInt, long aLong, boolean aBoolean, float aFloat,
+            double aDouble, String aString);
+
+    // in 表示传入数据， out 表示传出数据， inout 表示双向传递。注意含有 out 时 User 类需要实现 readFromParcel() 方法
+    void addUser(in User user);
+}
+
+// User.aidl
+package com.android.aidltest;
+parcelable User;
 ```
 运行编译后，会在 `generated` 文件夹中生成一个 [IRemoteService.java](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L92) 接口文件。这个接口中有两个内部类 [Stub](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L19) 和 [Stub.Proxy](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L92)。
 
-客户端会从 [Stub.asInterface()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L34) 得到 `IRemoteService (Stub.Proxy)` 的实例，这个实例就是一个通过 Binder 传递回来的 [远程对象](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L93) 的再包装。而服务端则需要实现 [IRemoteService.addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L15) 方法。
+客户端会从 [Stub.asInterface()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L34) 得到 `IRemoteService (Stub.Proxy)` 的实例，这个实例就是一个通过 Binder 传递回来的 [远程对象](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L93) 的包装。而服务端则需要实现 [IRemoteService.addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L15) 方法。
 
 ```java
-        public static org.xdty.remoteservice.IRemoteService asInterface(android.os.IBinder obj) {
-            if ((obj == null)) {
-                return null;
-            }
-            android.os.IInterface iin = obj.queryLocalInterface(DESCRIPTOR);
-            if (((iin != null) && (iin instanceof org.xdty.remoteservice.IRemoteService))) {
-                return ((org.xdty.remoteservice.IRemoteService) iin);
-            }
-            return new org.xdty.remoteservice.IRemoteService.Stub.Proxy(obj);
-        }
+public static org.xdty.remoteservice.IRemoteService asInterface(android.os.IBinder obj) {
+    if ((obj == null)) {
+        return null;
+    }
+    android.os.IInterface iin = obj.queryLocalInterface(DESCRIPTOR);
+    if (((iin != null) && (iin instanceof org.xdty.remoteservice.IRemoteService))) {
+        return ((org.xdty.remoteservice.IRemoteService) iin);
+    }
+    return new org.xdty.remoteservice.IRemoteService.Stub.Proxy(obj);
+}
 ```
 
-### 2.2 AIDL服务端
+### 2.2 AIDL 服务端
 
-为了演示进程间通信，我们新建一个模块 `RemoteService` 来实现功能，并在客户端绑定服务。
+为了演示进程间通信，我们新建一个模块 [RemoteService](https://github.com/xdtianyu/AidlExample/tree/master/remoteservice) 来实现功能，并在客户端绑定服务。
 
-按客户端的结构新建 `IRemoteService.aidl` `User.aidl` `User.java` 文件，并拷贝内容，注意如果需要请修改包名。
+按客户端的结构新建 [IRemoteService.aidl(https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/aidl/org/xdty/remoteservice/IRemoteService.aidl) [User.aidl](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/aidl/org/xdty/remoteservice/User.aidl) [User.java](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/java/org/xdty/remoteservice/User.java) 文件，并拷贝内容，注意如果需要请修改包名。
 
-新建服务 `RemoteService` 并在 `onBind()` 时返回 `IRemoteService.Stub` 实例：
+新建服务 [RemoteService](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/java/org/xdty/remoteservice/RemoteService.java#L29) `onBind()` 时返回 `IRemoteService.Stub` 实例：
   
 ```java
-    public class RemoteService extends Service {
-        @Nullable
-        @Override
-        public IBinder onBind(Intent intent) {
-            return mBinder;
-        }
-    
-        // 实现 IRemoteService 接口
-        private IBinder mBinder = new IRemoteService.Stub() {
-            @Override
-            public void basicTypes(int anInt, long aLong, boolean aBoolean, float aFloat, double aDouble, String aString) throws RemoteException {
-                Log.e("RemoteService", "basicTypes()");
-            }
-    
-            @Override
-            public void addUser(User user) throws RemoteException {
-                Log.e("RemoteService", "addUser()");
-            }
-        };
+public class RemoteService extends Service {
+    @Nullable
+    @Override
+    public IBinder onBind(Intent intent) {
+        return mBinder;
     }
+
+    // 实现 IRemoteService 接口
+    private IBinder mBinder = new IRemoteService.Stub() {
+        @Override
+        public void basicTypes(int anInt, long aLong, boolean aBoolean, float aFloat, double aDouble, String aString) throws RemoteException {
+            Log.e("RemoteService", "basicTypes()");
+        }
+
+        @Override
+        public void addUser(User user) throws RemoteException {
+            Log.e("RemoteService", "addUser()");
+        }
+    };
+}
 ```
 
-这样服务端就实现了 [addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L15) 方法，当客户端通过远程对象调用 [IRemoteService.Stub.Proxy.addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L135) 时，远程对象 [mRemote](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L147) 就会通过 [transact()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L147) 发送命令给服务端，服务端收到命令后在 [Stub.onTransact()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L76) 中读取数据并执行 [addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L84) 操作。
+这样服务端就实现了 [addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L15) 方法，当客户端通过远程对象调用 [IRemoteService.Stub.Proxy.addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L135) 时，远程对象 [mRemote](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L147) 就会通过 [transact()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L147) 发送命令给服务端，服务端收到命令后在 [Stub.onTransact()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L76) 中读取数据并执行 [addUser()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L84) 方法。更多细节我们将在 [3. Binder 框架及 Native 层](#3-binder-%E6%A1%86%E6%9E%B6%E5%8F%8A-native-%E5%B1%82) 小节讲述。
+
+```java
+// IRemoteService.java
+@Override
+public boolean onTransact(int code, android.os.Parcel data, android.os.Parcel reply,
+        int flags) throws android.os.RemoteException {
+    switch (code) {
+        ...
+        case TRANSACTION_addUser: {
+            data.enforceInterface(DESCRIPTOR);
+            org.xdty.remoteservice.User _arg0;
+            if ((0 != data.readInt())) {
+                _arg0 = org.xdty.remoteservice.User.CREATOR.createFromParcel(data);
+            } else {
+                _arg0 = null;
+            }
+            this.addUser(_arg0);
+            reply.writeNoException();
+            return true;
+        }
+    }
+    return super.onTransact(code, data, reply, flags);
+}
+```
 
 远程 Binder 对象 [mRemote](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L42) 是由客户端绑定服务时 [onServiceConnected()](https://github.com/xdtianyu/AidlExample/blob/master/app/src/main/java/org/xdty/aidlexample/MainActivity.java#L23) 返回的。继续追踪 [bindService()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/ContextImpl.java#L1283)
 
 ```java
-    @Override
-    public boolean bindService(Intent service, ServiceConnection conn,
-            int flags) {
-        warnIfCallingFromSystemProcess();
-        return bindServiceCommon(service, conn, flags, Process.myUserHandle());
-    }
+// ContextImpl.java
+@Override
+public boolean bindService(Intent service, ServiceConnection conn,
+        int flags) {
+    warnIfCallingFromSystemProcess();
+    return bindServiceCommon(service, conn, flags, Process.myUserHandle());
+}
 ```
 
-可以看到最后是 [ActivityManagerNative.getDefault().bindService()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/ContextImpl.java#L1317#L1320) 来绑定服务
+可以看到最后是通过 [ActivityManagerNative.getDefault().bindService()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/ContextImpl.java#L1317#L1320) 来绑定服务
 
 ```java
-    // bindServiceCommon()
-    int res = ActivityManagerNative.getDefault().bindService(
-        mMainThread.getApplicationThread(), getActivityToken(), service,
-        service.resolveTypeIfNeeded(getContentResolver()),
-        sd, flags, getOpPackageName(), user.getIdentifier());
-    
-    // ActivityManagerNative.getDefault().bindService()
-    public int bindService(IApplicationThread caller, IBinder token,
-            Intent service, String resolvedType, IServiceConnection connection,
-            int flags,  String callingPackage, int userId) throws RemoteException {
-        ...
-        data.writeStrongBinder(connection.asBinder());
-        ...
-        mRemote.transact(BIND_SERVICE_TRANSACTION, data, reply, 0);
-        ...
-    }
-    
+// bindServiceCommon()
+int res = ActivityManagerNative.getDefault().bindService(
+    mMainThread.getApplicationThread(), getActivityToken(), service,
+    service.resolveTypeIfNeeded(getContentResolver()),
+    sd, flags, getOpPackageName(), user.getIdentifier());
+
+// ActivityManagerNative.getDefault().bindService()
+public int bindService(IApplicationThread caller, IBinder token,
+        Intent service, String resolvedType, IServiceConnection connection,
+        int flags,  String callingPackage, int userId) throws RemoteException {
+    ...
+    data.writeStrongBinder(connection.asBinder());
+    ...
+    mRemote.transact(BIND_SERVICE_TRANSACTION, data, reply, 0);
+    ...
+}
 ```
 
 追踪到 [ActivityManagerNative.getDefault().bindService()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/ActivityManagerNative.java#L3740) ，可以发现 `ActivityManager` 和 [IServiceConnection](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/ActivityManagerNative.java#L3750)也是一个 `AIDL` 实现。通过它的 `ActivityManagerProxy.bindService()` 将绑定请求发送给本地层。
@@ -213,13 +235,13 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
 
 从上面分析可以看出， AIDL 的本质是对 Binder 的又一次抽象和封装，实际的进程间通信仍是由 Binder 完成的。
 
-## 3. Binder框架及Native层
+## 3. Binder 框架及 Native 层
 
 Binder机制使本地对象可以像操作当前对象一样调用远程对象，可以使不同的进程间互相通信。Binder 使用 Client/Server 架构，客户端通过服务端代理，经过 Binder 驱动与服务端交互。
 
 ![Binder框架图片](https://raw.githubusercontent.com/xdtianyu/SourceAnalysis/master/art/Binder.png)
 
-Binder 机制实现进程间通信的奥秘在于 kernel 中的 Binder 驱动，将在 [Binder驱动](#Binder驱动) 小节详细讲述。
+Binder 机制实现进程间通信的奥秘在于 kernel 中的 Binder 驱动，将在 [4. Binder 驱动](#4-binder-%E9%A9%B1%E5%8A%A8) 小节详细讲述。
 
 ![Binder本地框架图片](https://raw.githubusercontent.com/xdtianyu/SourceAnalysis/master/art/binder_native.png)
 
@@ -730,7 +752,7 @@ status_t BpBinder::linkToDeath(
 [APPOpsManager (APP Operation Manager)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/AppOpsManager.cpp) 是 应用操作管理者，实现对客户端操作的检查、启动、完成等。
 
 
-## 4. Binder驱动
+## 4. Binder 驱动
 
 Binder 驱动是 Binder 的最终实现， ServiceManager 和 Client/Service 进程间通信最终都是由 Binder 驱动投递的。
 
@@ -823,7 +845,7 @@ struct binder_transaction_data {
 };
 ```
 
-`flat_binder_object` 就被封装在 [*buffer](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L142)中，其中的 [unsigned int    code;](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L126) 则是传输命令，描述了 Binder 对象执行的操作。
+`flat_binder_object` 就被封装在 [*buffer](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L142)中，其中的 [unsigned int   code;](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L126) 则是传输命令，描述了 Binder 对象执行的操作。
 
 
 **binder 设备的创建**
@@ -949,7 +971,7 @@ struct binder_transaction_data {
 };
 ```
 
-## 5. Binder与系统服务
+## 5. Binder 与系统服务
 
 ### 5.1 Context.getSystemService()
 
@@ -1151,4 +1173,3 @@ Android 系统在启动后会在后台运行很多系统服务提供给应用使
 [Android Binder](https://web.archive.org/web/20101016004342/http://www.gmier.com/node/11)
 
 [Binder机制，从Java到C （7. Native Service）](http://www.cnblogs.com/zhangxinyan/p/3487889.html)
-
