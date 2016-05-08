@@ -1,6 +1,6 @@
-# Binder 源码分析 【进行中】
+# Binder 源码分析
 
-本文是基于 [Android 6.0.0](https://github.com/xdtianyu/android-6.0.0_r1) 和 [kernel 3.4](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow) 源码 及 Android SDK 23 展开的。~~所有的源文件都在 GitHub 托管，在文中可以点击链接查看完整的代码。~~
+本文是基于 [Android 6.0.0](https://github.com/xdtianyu/android-6.0.0_r1) 和 [kernel 3.4](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow) 源码 及 Android SDK 23 展开的。
 
 **目录**
 
@@ -8,27 +8,30 @@
 - [2. Binder 与 AIDL](#2-binder-%E4%B8%8E-aidl)
   - [2.1 AIDL 客户端](#21-aidl-%E5%AE%A2%E6%88%B7%E7%AB%AF)
   - [2.2 AIDL 服务端](#22-aidl-%E6%9C%8D%E5%8A%A1%E7%AB%AF)
+  - [2.3 远程服务的获取与使用](#23-%E8%BF%9C%E7%A8%8B%E6%9C%8D%E5%8A%A1%E7%9A%84%E8%8E%B7%E5%8F%96%E4%B8%8E%E4%BD%BF%E7%94%A8)
 - [3. Binder 框架及 Native 层](#3-binder-%E6%A1%86%E6%9E%B6%E5%8F%8A-native-%E5%B1%82)
   - [3.1 Binder Native 的入口](#31-binder-native-%E7%9A%84%E5%85%A5%E5%8F%A3)
   - [3.2 Binder 本地层的整个函数/方法调用过程](#32-binder-%E6%9C%AC%E5%9C%B0%E5%B1%82%E7%9A%84%E6%95%B4%E4%B8%AA%E5%87%BD%E6%95%B0%E6%96%B9%E6%B3%95%E8%B0%83%E7%94%A8%E8%BF%87%E7%A8%8B)
   - [3.3 Binder 设备文件的打开和读写](#33-binder-%E8%AE%BE%E5%A4%87%E6%96%87%E4%BB%B6%E7%9A%84%E6%89%93%E5%BC%80%E5%92%8C%E8%AF%BB%E5%86%99)
 - [4. Binder 驱动](#4-binder-%E9%A9%B1%E5%8A%A8)
+  - [4.1 binder 设备的创建](#41-binder-%E8%AE%BE%E5%A4%87%E7%9A%84%E5%88%9B%E5%BB%BA)
+  - [4.2 binder协议和数据结构](#42-binder%E5%8D%8F%E8%AE%AE%E5%92%8C%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84)
+  - [4.3 binder 驱动文件操作](#43-binder-%E9%A9%B1%E5%8A%A8%E6%96%87%E4%BB%B6%E6%93%8D%E4%BD%9C)
 - [5. Binder 与系统服务](#5-binder-%E4%B8%8E%E7%B3%BB%E7%BB%9F%E6%9C%8D%E5%8A%A1)
   - [5.1 Context.getSystemService()](#51-contextgetsystemservice)
   - [5.2 Context.getSystemService() 源码分析](#52-contextgetsystemservice-%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90)
-- [6. 背景](#6-%E8%83%8C%E6%99%AF)
-- [7. 结论](#7-%E7%BB%93%E8%AE%BA)
-- [8. 参考](#8-%E5%8F%82%E8%80%83)
+- [6. 结论](#6-%E7%BB%93%E8%AE%BA)
+- [7. 参考](#7-%E5%8F%82%E8%80%83)
 
 ## 1. 简介
 
-Binder 是一种 Android 进程间通信机制，提供远程过程调用(Remote Procedure Call)功能。~~我们最直接的使用应该是在调用 `Context.getSystemService()` 来获取系统服务，或直接使用 `AIDL` 来实现多个程序(APP)间数据交互。~~
+Binder 是一种 Android 进程间通信机制，提供远程过程调用(Remote Procedure Call)功能。我们最直接的使用是调用 `Context.getSystemService()` 来获取系统服务，或直接使用 `AIDL` 来实现多个程序(APP)间数据交互。
 
 Binder 是非常重要的 Android 基础组件，几乎所有的进程间通信都是使用 Binder 机制实现的。本文将结合源码展开讲述 Binder ，同时对一些重要知识点提供扩展阅读的参考。
 
 ![android_binder](https://raw.githubusercontent.com/xdtianyu/SourceAnalysis/master/art/android_binder.png)
 
-不管是 Android 系统服务(System services)还是用户的应用进程(User apps)，最终都会通过 binder 来实现进程间通信。上次应用首先通过 IBinder 的 transcate 方法发送命令给 libbinder， libbinder 再通过系统调用(ioctl) 发送命令到内核中的 binder 驱动，之后再由驱动完成进程间数据的交互。
+不管是 Android 系统服务(System services)还是用户的应用进程(User apps)，最终都会通过 binder 来实现进程间通信。上层应用首先通过 IBinder 的 transcate 方法发送命令给 libbinder， libbinder 再通过系统调用(ioctl) 发送命令到内核中的 binder 驱动，之后再由驱动完成进程间数据的交互。
 
 我们经常使用的 Intent，Messager 数据传递也是对 Binder 更高层次的抽象和封装，最终还是会由内核中的 binder 驱动完成数据的传递。
 
@@ -47,7 +50,7 @@ AIDL (Android Interface definition language) 是接口描述语言，用于生�
 
 ### 2.1 AIDL 客户端
 
-在 Android Studio 项目上右键， `New` -> `AIDL` -> `AIDL File` 输入文件名后可以快速创建一个 AIDL 的代码结构。例如我们新建一个 `IRemoteService.aidl` 文件
+在 Android Studio 项目上右键， `New` -> `AIDL` -> `AIDL File` 输入文件名后可以快速创建一个 AIDL 的代码结构。例如我们新建一个 [IRemoteService.aidl](https://github.com/xdtianyu/AidlExample/blob/master/app/src/main/aidl/org/xdty/remoteservice/IRemoteService.aidl) 文件
 
 ```java
 // IRemoteService.aidl
@@ -101,7 +104,7 @@ public class User implements Parcelable {
 }
 ```
 
-再向 `IRemoteService.aidl` 中添加一个 `addUser()` 方法，同时新建一个 `User.aidl` 文件。
+再向 `IRemoteService.aidl` 中添加一个 `addUser()` 方法，同时新建一个 [User.aidl](https://github.com/xdtianyu/AidlExample/blob/master/app/src/main/aidl/org/xdty/remoteservice/User.aidl) 文件。
 
 ```java
 // IRemoteService.aidl
@@ -142,33 +145,33 @@ public static org.xdty.remoteservice.IRemoteService asInterface(android.os.IBind
 
 ### 2.2 AIDL 服务端
 
-为了演示进程间通信，我们新建一个模块 [RemoteService](https://github.com/xdtianyu/AidlExample/tree/master/remoteservice) 来实现功能，并在客户端绑定服务。
+为了演示进程间通信，我们新建一个模块（应用） [RemoteService](https://github.com/xdtianyu/AidlExample/tree/master/remoteservice) 来实现功能，并在客户端绑定服务。
 
-按客户端的结构新建 [IRemoteService.aidl(https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/aidl/org/xdty/remoteservice/IRemoteService.aidl) [User.aidl](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/aidl/org/xdty/remoteservice/User.aidl) [User.java](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/java/org/xdty/remoteservice/User.java) 文件，并拷贝内容，注意如果需要请修改包名。
+按客户端的结构新建 [IRemoteService.aidl](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/aidl/org/xdty/remoteservice/IRemoteService.aidl) [User.aidl](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/aidl/org/xdty/remoteservice/User.aidl) [User.java](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/java/org/xdty/remoteservice/User.java) 文件，并拷贝内容，注意如果需要请修改包名。
 
-新建服务 [RemoteService](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/java/org/xdty/remoteservice/RemoteService.java#L29) `onBind()` 时返回 `IRemoteService.Stub` 实例：
+新建服务 [RemoteService](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/java/org/xdty/remoteservice/RemoteService.java#L29) ，覆盖(Override) `onBind()` 方法并返回 `IRemoteService.Stub` 实例 [mBinder](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/java/org/xdty/remoteservice/RemoteService.java#L11)：
   
 ```java
 // RemoteService.java
 public class RemoteService extends Service {
-    @Nullable
-    @Override
-    public IBinder onBind(Intent intent) {
-        return mBinder;
-    }
-
-    // 实现 IRemoteService 接口
+    private static final String TAG = RemoteService.class.getSimpleName();
     private IBinder mBinder = new IRemoteService.Stub() {
         @Override
-        public void basicTypes(int anInt, long aLong, boolean aBoolean, float aFloat, double aDouble, String aString) throws RemoteException {
-            Log.e("RemoteService", "basicTypes()");
+        public void basicTypes(int anInt, long aLong, boolean aBoolean, float aFloat,
+                double aDouble, String aString) throws RemoteException {
+            Log.d(TAG, "basicTypes: ");
         }
 
         @Override
         public void addUser(User user) throws RemoteException {
-            Log.e("RemoteService", "addUser()");
+            Log.d(TAG, "addUser: " + user.name);
         }
     };
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return mBinder;
+    }
 }
 ```
 
@@ -197,6 +200,110 @@ public boolean onTransact(int code, android.os.Parcel data, android.os.Parcel re
     return super.onTransact(code, data, reply, flags);
 }
 ```
+
+### 2.3 远程服务的获取与使用
+
+客户端要使用远程服务，需要绑定服务 ([bindService](https://github.com/xdtianyu/AidlExample/blob/master/app/src/main/java/org/xdty/aidlexample/MainActivity.java#L45)) 并建立服务连接 ([ServiceConnection](https://github.com/xdtianyu/AidlExample/blob/master/app/src/main/java/org/xdty/aidlexample/MainActivity.java#L19))。
+
+```java
+// MainActivity.java
+public class MainActivity extends AppCompatActivity {
+    private ServiceConnection mConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            IRemoteService remoteService = IRemoteService.Stub.asInterface(service);
+            try {
+                remoteService.addUser(new User(1, "neo"));
+            } catch (RemoteException e) {
+                e.printStackTrace();
+            }
+        }
+        ...
+    };
+    ...
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        ...
+        Intent intent = new Intent().setComponent(new ComponentName(
+                "org.xdty.remoteservice",
+                "org.xdty.remoteservice.RemoteService"));
+        bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
+    }
+}
+```
+
+我们可以看出，客户端通过 `binderService()` 方法，获取远程服务并在服务连接 `ServiceConnection` 中 `onServiceConnected()` 回调中得到了 `IBinder service` 实例， 最后通过上文提到的 `IRemoteService.Stub.asInterface(service)` 方法得到远程服务 `IRemoteService` 的实例。通过 `IRemoteService.addUser()` 方法我们可以像调用本地方法一样调用远程方法。在来看 `IRemoteService.addUser()` 的实现：
+
+```java
+// IRemoteService.java
+public static org.xdty.remoteservice.IRemoteService asInterface(android.os.IBinder obj) {
+    ...
+    return new org.xdty.remoteservice.IRemoteService.Stub.Proxy(obj);
+}
+
+private static class Proxy implements org.xdty.remoteservice.IRemoteService {
+    private android.os.IBinder mRemote;
+
+    Proxy(android.os.IBinder remote) {
+        mRemote = remote;
+    }
+
+    @Override
+    public android.os.IBinder asBinder() {
+        return mRemote;
+    }
+    ...
+    @Override
+    public void addUser(org.xdty.remoteservice.User user)
+            throws android.os.RemoteException {
+        android.os.Parcel _data = android.os.Parcel.obtain();
+        android.os.Parcel _reply = android.os.Parcel.obtain();
+        try {
+            _data.writeInterfaceToken(DESCRIPTOR);
+            if ((user != null)) {
+                _data.writeInt(1);
+                user.writeToParcel(_data, 0);
+            } else {
+                _data.writeInt(0);
+            }
+            mRemote.transact(Stub.TRANSACTION_addUser, _data, _reply, 0);
+            _reply.readException();
+        } finally {
+            _reply.recycle();
+            _data.recycle();
+        }
+    }
+}
+```
+
+可以看到客户端调用 [remoteService.addUser(new User(1, "neo"))](https://github.com/xdtianyu/AidlExample/blob/master/app/src/main/java/org/xdty/aidlexample/MainActivity.java#L25) 方法实际上是通过 [IBinder service](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L147) 实例的 [transact()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L147) 方法，发送了与服务端约定好的命令 `Stub.TRANSACTION_addUser`，并将参数按格式打包进 [Parcel](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L137) 对象。
+
+服务端则在 [onTransact()](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L51) 方法中收到命令后会对命令和参数重新解析：
+
+```java
+// IRemoteService.java
+public boolean onTransact(int code, android.os.Parcel data, android.os.Parcel reply,
+        int flags) throws android.os.RemoteException {
+    switch (code) {
+        ...
+        case TRANSACTION_addUser: {
+            data.enforceInterface(DESCRIPTOR);
+            org.xdty.remoteservice.User _arg0;
+            if ((0 != data.readInt())) {
+                _arg0 = org.xdty.remoteservice.User.CREATOR.createFromParcel(data);
+            } else {
+                _arg0 = null;
+            }
+            this.addUser(_arg0);
+            reply.writeNoException();
+            return true;
+        }
+    }
+    return super.onTransact(code, data, reply, flags);
+}
+```
+
+可以看到在 `onTransact()` 中，最终 [this.addUser(_arg0)](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L84) 调用了上文提到的服务端的实现 [IRemoteService.Stub.addUser()](https://github.com/xdtianyu/AidlExample/blob/master/remoteservice/src/main/java/org/xdty/remoteservice/RemoteService.java#L19) 。
 
 远程 Binder 对象 [mRemote](https://github.com/xdtianyu/AidlExample/blob/master/app/build/generated/source/aidl/debug/org/xdty/remoteservice/IRemoteService.java#L42) 是由客户端绑定服务时 [onServiceConnected()](https://github.com/xdtianyu/AidlExample/blob/master/app/src/main/java/org/xdty/aidlexample/MainActivity.java#L23) 返回的。继续追踪 [bindService()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/ContextImpl.java#L1283)
 
@@ -234,6 +341,8 @@ public int bindService(IApplicationThread caller, IBinder token,
 追踪到 [ActivityManagerNative.getDefault().bindService()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/ActivityManagerNative.java#L3740) ，可以发现 `ActivityManager` 和 [IServiceConnection](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/ActivityManagerNative.java#L3750)也是一个 `AIDL` 实现。通过它的 `ActivityManagerProxy.bindService()` 将绑定请求发送给本地层。
 
 再从 `onServiceConnected()` 回调追踪， [onServiceConnected()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/LoadedApk.java#L1223) 是由 [LoadedApk.ServiceDispatcher.doConnected()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/LoadedApk.java#L1175) 回调的。
+
+*关于更多的 `bindService()` 远程服务创建及 `ServiceConnection` 回调， 请参考 [Android应用程序绑定服务（bindService）的过程源代码分析](http://blog.csdn.net/luoshengyang/article/details/6745181)*
 
 从上面分析可以看出， AIDL 的本质是对 Binder 的又一次抽象和封装，实际的进程间通信仍是由 Binder 完成的。
 
@@ -685,9 +794,11 @@ public static abstract class Stub extends android.os.Binder
 }
 ```
 
+上述过程就是所有的 Native 层客户端到服务端的调用过程，总结下来就是 客户端进程发送 `BC_TRANSACTION` 到 Binder 驱动，服务端进程监听返回的 `BR_TRANSACTION` 命令并处理。如果是服务端向客户端返回数据，类似的是服务端发送 `BC_REPLY` 命令， 客户端监听 `BR_REPLY` 命令。
+
 ### 3.3 Binder 设备文件的打开和读写
 
-**设备的打开**
+**1. 设备的打开**
 
 在上一小节中我们看到 JNI 过程中调用了 `ProcessState::getContextObject()` 函数， 在 [ProcessState](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/ProcessState.cpp#L340) 初始化时会打开 binder 设备
 
@@ -738,13 +849,13 @@ static int open_driver()
 }
 ```
 
-**设备的读写**
+**2. 设备的读写**
 
 打开设备文件后，文件描述符被保存在 [mDriverFD](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/ProcessState.cpp#L340)， 通过系统调用 `ioctl` 函数操作 `mDriverFD` 就可以实现和 binder 驱动的交互。
 
-对 Binder 设备文件的所有读写及关闭操作则都在 [IPCThreadState](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L805)中，如上一小节提及到的 [IPCThreadState::talkWithDriver](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L803) 函数
+对 Binder 设备文件的所有读写及关闭操作则都在 [IPCThreadState](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L805) 中，如上一小节提及到的 [IPCThreadState::talkWithDriver](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L803) 函数
 
-`talkWithDriver()` 函数封装了 `BINDER_WRITE_READ` 命令，会向 binder 驱动写入或从驱动读取封装在 [binder_write_read](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L856) 结构体中的本地或远程对象。
+`talkWithDriver()` 函数封装了 `BINDER_WRITE_READ` 命令，会从 binder 驱动读取或写入封装在 [binder_write_read](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L856) 结构体中的本地或远程对象。
 
 ```c++
 // IPCThreadState.cpp
@@ -774,85 +885,17 @@ status_t IPCThreadState::talkWithDriver(bool doReceive)
 }
 ```
 
----------------------------------------
-
-**BpBinder.cpp**
-
-`BpBinder(Base proxy Binder)` 对应于 Java 层的 `Service Proxy`,
-
-先查看头文件 [BpBinder.h](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/include/binder/BpBinder.h) 代码片断
-
-```c++
-class BpBinder : public IBinder
-{
-public:
-
-    inline  int32_t     handle() const { return mHandle; }
-
-    virtual status_t    transact(   uint32_t code,
-                                    const Parcel& data,
-                                    Parcel* reply,
-                                    uint32_t flags = 0);
-
-    virtual status_t    linkToDeath(const sp<DeathRecipient>& recipient,
-                                    void* cookie = NULL,
-                                    uint32_t flags = 0);
-    virtual status_t    unlinkToDeath(  const wp<DeathRecipient>& recipient,
-                                        void* cookie = NULL,
-                                        uint32_t flags = 0,
-                                        wp<DeathRecipient>* outRecipient = NULL);
-};
-```
-
-可以看到 [BpBinder](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/include/binder/BpBinder.h#L27) 中声明了 `transact()` `linkToDeath()` 等重要函数。再看具体实现
-
-```c++
-status_t BpBinder::transact(
-    uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags)
-{
-    ...
-    status_t status = IPCThreadState::self()->transact(
-        mHandle, code, data, reply, flags);
-    ...
-
-    return DEAD_OBJECT;
-}
-
-status_t BpBinder::linkToDeath(
-    const sp<DeathRecipient>& recipient, void* cookie, uint32_t flags)
-{
-    ...
-    IPCThreadState* self = IPCThreadState::self();
-                self->requestDeathNotification(mHandle, this);
-                self->flushCommands();
-    ...
-    return DEAD_OBJECT;
-}
-```
-
-可以看出 BPBinder 是最终是通过调用 `IPCThreadState` 的函数来完成数据传递操作。
-
-
-**IPCThreadState.cpp**
-
-
-**AppOpsManager.cpp**
-
-[APPOpsManager (APP Operation Manager)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/AppOpsManager.cpp) 是 应用操作管理者，实现对客户端操作的检查、启动、完成等。
-
------------------------------
+可以看出，本地层是对应用与 binder 驱动交互的直接封装与实现，最终的数据传输仍是由驱动来完成的。本地层对底层驱动进行了完整的封装，上层应用只关心 transact() 和 onTransact() 回调，察觉不到 binder 驱动的存在，减轻了上层应用进程间通信开发的复杂度。
 
 ## 4. Binder 驱动
+
+关于 binder 驱动建议参考另一篇文章 [深入分析Android Binder 驱动](http://blog.csdn.net/yangwen123/article/details/9316987) [原文]([Android Binder](https://web.archive.org/web/20101016004342/http://www.gmier.com/node/11)，本小节仍需要完善。
 
 Binder 驱动是 Binder 的最终实现， ServiceManager 和 Client/Service 进程间通信最终都是由 Binder 驱动投递的。
 
 ![Binder reference](https://raw.githubusercontent.com/xdtianyu/SourceAnalysis/master/art/binder_reference.png)
 
 Binder 驱动的代码位于 kernel 代码的 [drivers/staging/android](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/tree/master/drivers/staging/android) 目录下。主文件是 [binder.h](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h) 和 [binder.c](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c)
-
-Binder 驱动的逻辑图
-
-![Binder driver]()
 
 进程间传输的数据被称为 Binder 对象，它是一个 [flat_binder_object](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L49)，结构如下
 
@@ -942,14 +985,16 @@ struct binder_transaction_data {
 `flat_binder_object` 就被封装在 [*buffer](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L142)中，其中的 [unsigned int   code;](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L126) 则是传输命令，描述了 Binder 对象执行的操作。
 
 
-**1. binder 设备的创建**
+### 4.1 binder 设备的创建
 
 [device_initcall()](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3747) 函数是内核加载驱动的入口函数，我们先来看这个函数的调用过程。
 
 ```c
 static struct miscdevice binder_miscdev = {
     .minor = MISC_DYNAMIC_MINOR,
+    // 设备文件 /dev/binder
     .name = "binder",
+    // 设备文件操作
     .fops = &binder_fops
 };
 
@@ -957,8 +1002,18 @@ static int __init binder_init(void)
 {
     int ret;
     ...
+    // 注册字符设备
     ret = misc_register(&binder_miscdev);
     ...
+    // 调试文件， 在 /sys/kernel/debug/binder 目录下
+    if (binder_debugfs_dir_entry_root) {
+        debugfs_create_file("state",
+                    S_IRUGO,
+                    binder_debugfs_dir_entry_root,
+                    NULL,
+                    &binder_state_fops);
+        ...
+    }
     return ret;
 }
 
@@ -979,11 +1034,7 @@ static const struct file_operations binder_fops = {
 ```
 从上面 `binder_fops` 结构体可以看出，主要的操作是 `binder_ioctl()` `binder_mmap()` `binder_open()` 等函数实现的。
 
-**2. ServiceManager 服务的注册**
-
-
-
-**binder协议和数据结构**
+### 4.2 binder协议和数据结构
 
 [binder.h](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h) 文件中定义了 binder 协议和重要的数据结构。
 
@@ -1011,15 +1062,348 @@ enum {
 ```
 在 [BinderDriverReturnProtocol](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L166) 和 [BinderDriverCommandProtocol](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L254) 中 则分别定义了 客户端调用 和 服务端 返回的命令。
 
+### 4.3 binder 驱动文件操作
 
-**binder_ioctl() 函数**
+上文已经提到，所有的操作定义在 [binder_fops](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3683) 结构体中，下面讲述这些操作。
 
-用户态程序调用 `ioctl` 系统函数向 `/dev/binder` 设备发送数据时，会触发 `binder_ioctl` 函数响应。
+**设备的打开 - binder_open() 函数**
 
-[binder_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L2734) 函数用来处理
+用户空间在打开 `/dev/binder` 设备时，驱动会出发 [binder_open()](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3004) 函数的响应。
 
+```c
+static int binder_open(struct inode *nodp, struct file *filp)
+{
+    struct binder_proc *proc;
 
-Binder 在头文件中只要定义了两个数据类型, 一个是 `binder_write_read`
+    // 分配 binder_proc 数据结构内存
+    proc = kzalloc(sizeof(*proc), GFP_KERNEL);
+    if (proc == NULL)
+        return -ENOMEM;
+    
+    // 增加当前线程/进程的引用计数并赋值给tsk
+    get_task_struct(current);
+    proc->tsk = current;
+    // 初始化队列
+    INIT_LIST_HEAD(&proc->todo);
+    init_waitqueue_head(&proc->wait);
+    proc->default_priority = task_nice(current);
+
+    binder_lock(__func__);
+
+    // 增加BINDER_STAT_PROC的对象计数
+    binder_stats_created(BINDER_STAT_PROC);
+    // 添加 proc_node 到 binder_procs 全局列表中，这样任何进程就可以访问到其他进程的 binder_proc 对象了
+    hlist_add_head(&proc->proc_node, &binder_procs);
+    // 保存进程 id
+    proc->pid = current->group_leader->pid;
+    INIT_LIST_HEAD(&proc->delivered_death);
+    // 驱动文件 private_data 指向 proc
+    filp->private_data = proc;
+
+    binder_unlock(__func__);
+    
+    return 0;
+}
+```
+
+**驱动文件释放 - binder_release() 函数**
+
+在用户空间关闭驱动设备文件时，会调用 [binder_release()](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L3068) 函数，清理 binder_proc 对象，释放占用的内存。
+
+```c
+static int binder_release(struct inode *nodp, struct file *filp)
+{
+    struct binder_proc *proc = filp->private_data;
+    binder_defer_work(proc, BINDER_DEFERRED_RELEASE);
+
+    return 0;
+}
+
+static void
+binder_defer_work(struct binder_proc *proc, enum binder_deferred_state defer)
+{
+    mutex_lock(&binder_deferred_lock);
+    proc->deferred_work |= defer;
+    if (hlist_unhashed(&proc->deferred_work_node)) {
+        // 添加到释放队列中
+        hlist_add_head(&proc->deferred_work_node,
+                &binder_deferred_list);
+        queue_work(binder_deferred_workqueue, &binder_deferred_work);
+    }
+    mutex_unlock(&binder_deferred_lock);
+}
+```
+
+**内存映射 - binder_mmap() 函数**
+
+[binder_mmap()](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L2905) 函数把设备内存映射到用户进程地址空间中，这样就可以像操作用户内存那样操作设备内存。
+
+```c
+static int binder_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+    int ret;
+    struct vm_struct *area;
+    // 获得 binder_proc 对象
+    struct binder_proc *proc = filp->private_data;
+    const char *failure_string;
+    struct binder_buffer *buffer;
+
+    // 最多只分配 4M 的内存
+    if ((vma->vm_end - vma->vm_start) > SZ_4M)
+        vma->vm_end = vma->vm_start + SZ_4M;
+
+    // 检查 flags
+    if (vma->vm_flags & FORBIDDEN_MMAP_FLAGS) {
+        ret = -EPERM;
+        failure_string = "bad vm_flags";
+        goto err_bad_arg;
+    }
+    vma->vm_flags = (vma->vm_flags | VM_DONTCOPY) & ~VM_MAYWRITE;
+
+    mutex_lock(&binder_mmap_lock);
+    // 检查是否已经映射
+    if (proc->buffer) {
+        ret = -EBUSY;
+        failure_string = "already mapped";
+        goto err_already_mapped;
+    }
+
+    // 申请内核虚拟内存空间
+    area = get_vm_area(vma->vm_end - vma->vm_start, VM_IOREMAP);
+    if (area == NULL) {
+        ret = -ENOMEM;
+        failure_string = "get_vm_area";
+        goto err_get_vm_area_failed;
+    }
+    // 将申请到的内存地址保存到 binder_proc 对象中
+    proc->buffer = area->addr;
+    proc->user_buffer_offset = vma->vm_start - (uintptr_t)proc->buffer;
+    mutex_unlock(&binder_mmap_lock);
+
+    // 根据请求到的内存空间大小，分配给 binder_proc 对象的 pages， 用于保存指向物理页的指针
+    proc->pages = kzalloc(sizeof(proc->pages[0]) * ((vma->vm_end - vma->vm_start) / PAGE_SIZE), GFP_KERNEL);
+    if (proc->pages == NULL) {
+        ret = -ENOMEM;
+        failure_string = "alloc page array";
+        goto err_alloc_pages_failed;
+    }
+    proc->buffer_size = vma->vm_end - vma->vm_start;
+
+    vma->vm_ops = &binder_vm_ops;
+    vma->vm_private_data = proc;
+
+    // 分配一个页的物理内存
+    if (binder_update_page_range(proc, 1, proc->buffer, proc->buffer + PAGE_SIZE, vma)) {
+        ret = -ENOMEM;
+        failure_string = "alloc small buf";
+        goto err_alloc_small_buf_failed;
+    }
+    // 内存提供给 binder_buffer
+    buffer = proc->buffer;
+    // 初始化 proc->buffers 链表
+    INIT_LIST_HEAD(&proc->buffers);
+    // 将 binder_buffer 对象放入到 proc->buffers 链表中
+    list_add(&buffer->entry, &proc->buffers);
+    buffer->free = 1;
+    binder_insert_free_buffer(proc, buffer);
+    proc->free_async_space = proc->buffer_size / 2;
+    barrier();
+    proc->files = get_files_struct(proc->tsk);
+    proc->vma = vma;
+    proc->vma_vm_mm = vma->vm_mm;
+
+    return 0;
+}
+```
+
+**驱动命令接口 - binder_ioctl() 函数**
+
+用户态程序调用 `ioctl` 系统函数向 `/dev/binder` 设备发送数据时，会触发 [binder_ioctl()](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L2734) 函数响应。
+
+上文数据结构中已经提到了 `binder_ioctl` 可以处理的 [命令](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L87)
+
+```c
+// 核心命令，数据的读写
+#define BINDER_WRITE_READ       _IOWR('b', 1, struct binder_write_read)
+// 设置最大线程数
+#define BINDER_SET_MAX_THREADS      _IOW('b', 5, size_t)
+// 设置 context manager
+#define BINDER_SET_CONTEXT_MGR      _IOW('b', 7, int)
+// 线程退出命令
+#define BINDER_THREAD_EXIT      _IOW('b', 8, int)
+// binder 驱动的版本
+#define BINDER_VERSION          _IOWR('b', 9, struct binder_version)
+```
+
+```c
+static long binder_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    int ret;
+    struct binder_proc *proc = filp->private_data;
+    struct binder_thread *thread;
+    unsigned int size = _IOC_SIZE(cmd);
+    void __user *ubuf = (void __user *)arg;
+
+    // 检查是否有错误
+    ret = wait_event_interruptible(binder_user_error_wait, binder_stop_on_user_error < 2);
+    if (ret)
+        goto err_unlocked;
+
+    binder_lock(__func__);
+    // 获取 binder_thread 对象
+    thread = binder_get_thread(proc);
+    if (thread == NULL) {
+        ret = -ENOMEM;
+        goto err;
+    }
+
+    switch (cmd) {
+    case BINDER_WRITE_READ: {
+        struct binder_write_read bwr;
+        if (size != sizeof(struct binder_write_read)) {
+            ret = -EINVAL;
+            goto err;
+        }
+        // 从用户空间拷贝 binder_write_read 到 binder 驱动，储存在 bwr
+        if (copy_from_user(&bwr, ubuf, sizeof(bwr))) {
+            ret = -EFAULT;
+            goto err;
+        }
+
+        if (bwr.write_size > 0) {
+            // 执行写入操作
+            ret = binder_thread_write(proc, thread, (void __user *)bwr.write_buffer, bwr.write_size, &bwr.write_consumed);
+            if (ret < 0) {
+                bwr.read_consumed = 0;
+                if (copy_to_user(ubuf, &bwr, sizeof(bwr)))
+                    ret = -EFAULT;
+                goto err;
+            }
+        }
+        if (bwr.read_size > 0) {
+            // 执行读取操作
+            ret = binder_thread_read(proc, thread, (void __user *)bwr.read_buffer, bwr.read_size, &bwr.read_consumed, filp->f_flags & O_NONBLOCK);
+            if (!list_empty(&proc->todo))
+                wake_up_interruptible(&proc->wait);
+            if (ret < 0) {
+                if (copy_to_user(ubuf, &bwr, sizeof(bwr)))
+                    ret = -EFAULT;
+                goto err;
+            }
+        }
+        // 操作完成后将数据返回给用户空间
+        if (copy_to_user(ubuf, &bwr, sizeof(bwr))) {
+            ret = -EFAULT;
+            goto err;
+        }
+        break;
+    }
+    case BINDER_SET_MAX_THREADS:
+        // 设置最大线程，从用户空间拷贝数据到 proc->max_threads
+        if (copy_from_user(&proc->max_threads, ubuf, sizeof(proc->max_threads))) {
+            ret = -EINVAL;
+            goto err;
+        }
+        break;
+    case BINDER_SET_CONTEXT_MGR:
+        // 检查是否已经设置
+        if (binder_context_mgr_node != NULL) {
+            ret = -EBUSY;
+            goto err;
+        }
+        // 设置 context manager
+        ret = security_binder_set_context_mgr(proc->tsk);
+        if (ret < 0)
+            goto err;
+        if (binder_context_mgr_uid != -1) {
+            if (binder_context_mgr_uid != current->cred->euid) {
+                ret = -EPERM;
+                goto err;
+            }
+        } else
+            binder_context_mgr_uid = current->cred->euid;
+        // 创建 binder_context_mgr_node 节点
+        binder_context_mgr_node = binder_new_node(proc, NULL, NULL);
+        if (binder_context_mgr_node == NULL) {
+            ret = -ENOMEM;
+            goto err;
+        }
+        // 初始化节点数据
+        binder_context_mgr_node->local_weak_refs++;
+        binder_context_mgr_node->local_strong_refs++;
+        binder_context_mgr_node->has_strong_ref = 1;
+        binder_context_mgr_node->has_weak_ref = 1;
+        break;
+    case BINDER_THREAD_EXIT:
+        // 线程退出，释放资源
+        binder_free_thread(proc, thread);
+        thread = NULL;
+        break;
+    case BINDER_VERSION:
+        // 将 binder 驱动版本号写入到用户空间 ubuf->protocol_version 中
+        if (put_user(BINDER_CURRENT_PROTOCOL_VERSION, &((struct binder_version *)ubuf)->protocol_version)) {
+            ret = -EINVAL;
+            goto err;
+        }
+        break;
+    default:
+        ret = -EINVAL;
+        goto err;
+    }
+    ret = 0;
+...
+}
+```
+
+```c
+static struct binder_node *binder_new_node(struct binder_proc *proc,
+                       void __user *ptr,
+                       void __user *cookie)
+{
+    struct rb_node **p = &proc->nodes.rb_node;
+    struct rb_node *parent = NULL;
+    struct binder_node *node;
+
+    // 查找要插入节点的父节点
+    while (*p) {
+        parent = *p;
+        node = rb_entry(parent, struct binder_node, rb_node);
+
+        if (ptr < node->ptr)
+            p = &(*p)->rb_left;
+        else if (ptr > node->ptr)
+            p = &(*p)->rb_right;
+        else
+            return NULL;
+    }
+
+    // 为要插入节点分配内存空间
+    node = kzalloc(sizeof(*node), GFP_KERNEL);
+    if (node == NULL)
+        return NULL;
+    binder_stats_created(BINDER_STAT_NODE);
+    // 插入节点
+    rb_link_node(&node->rb_node, parent, p);
+    rb_insert_color(&node->rb_node, &proc->nodes);
+    // 初始化
+    node->debug_id = ++binder_last_id;
+    node->proc = proc;
+    node->ptr = ptr;
+    node->cookie = cookie;
+    node->work.type = BINDER_WORK_NODE;
+    INIT_LIST_HEAD(&node->work.entry);
+    INIT_LIST_HEAD(&node->async_todo);
+    return node;
+}
+```
+
+**BINDER_WRITE_READ 处理过程**
+
+在 binder 本地层中，我们看到在 `IPCThreadState::talkWithDriver()` 函数中， binder 本地层通过 [ioctl()(mProcess->mDriverFD, BINDER_WRITE_READ, &bwr)](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/native/libs/binder/IPCThreadState.cpp#L856) 命令的形式，与 binder 驱动交互。
+
+可以看出 `ioctl()` 的第三个参数是一个 [binder_write_read](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h#L69) 结构体
+
+binder.h 头文件中定义了两个数据类型, 一个是 `binder_write_read`
 
 ```c
 struct binder_write_read {
@@ -1031,43 +1415,837 @@ struct binder_write_read {
     unsigned long   read_buffer;
 };
 ```
+其中 `write_size` 和 `read_size` 表示需要被读写的字节数， `write_consumed` 和 `read_consumed` 表示已经被 binder 驱动读写的字节数， `write_buffer` 和 `read_buffer` 则是指向被读写数据的指针。
 
-以及 `binder_transaction_data`
+具体的读写操作被 [binder_thread_write](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L1852) 和 [binder_thread_read](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L2266) 实现。
+
+**数据写入 - binder_thread_write() 函数**
+
+将用户空间数据写入到 binder 驱动，从驱动角度来看是读取的操作。
 
 ```c
-struct binder_transaction_data {
-    /* The first two are only used for bcTRANSACTION and brTRANSACTION,
-     * identifying the target and contents of the transaction.
-     */
-    union {
-        size_t  handle; /* target descriptor of command transaction */
-        void    *ptr;   /* target descriptor of return transaction */
-    } target;
-    void        *cookie;    /* target object cookie */
-    unsigned int    code;       /* transaction command */
+int binder_thread_write(struct binder_proc *proc, struct binder_thread *thread,
+            void __user *buffer, int size, signed long *consumed)
+{
+    uint32_t cmd;
+    // 用户空间数据，起始地址和结束地址
+    void __user *ptr = buffer + *consumed;
+    void __user *end = buffer + size;
 
-    /* General information about the transaction. */
-    unsigned int    flags;
-    pid_t       sender_pid;
-    uid_t       sender_euid;
-    size_t      data_size;  /* number of bytes of data */
-    size_t      offsets_size;   /* number of bytes of offsets */
+    // 循环读取
+    while (ptr < end && thread->return_error == BR_OK) {
+        // 从用户空间获取操作命令
+        if (get_user(cmd, (uint32_t __user *)ptr))
+            return -EFAULT;
+        ptr += sizeof(uint32_t);
+        if (_IOC_NR(cmd) < ARRAY_SIZE(binder_stats.bc)) {
+            // 增加命令计数器
+            binder_stats.bc[_IOC_NR(cmd)]++;
+            proc->stats.bc[_IOC_NR(cmd)]++;
+            thread->stats.bc[_IOC_NR(cmd)]++;
+        }
+        switch (cmd) {
+        // 这四个命令用来增加或减少对象的引用计数， 操作目标 binder_ref
+        case BC_INCREFS:
+        case BC_ACQUIRE:
+        case BC_RELEASE:
+        case BC_DECREFS: {
+            uint32_t target;
+            struct binder_ref *ref;
+            const char *debug_string;
+            
+            // 获取目标进程节点描述 desc
+            if (get_user(target, (uint32_t __user *)ptr))
+                return -EFAULT;
+            ptr += sizeof(uint32_t);
+            // 索描述为 0 表示 context manager 进程
+            if (target == 0 && binder_context_mgr_node &&
+                (cmd == BC_INCREFS || cmd == BC_ACQUIRE)) {
+                // 在 proc->refs_by_node.rb_node 红黑树中查找引用
+                ref = binder_get_ref_for_node(proc,
+                           binder_context_mgr_node);
+            } else
+                // 在 proc->refs_by_desc.rb_node 红黑树中查找引用
+                ref = binder_get_ref(proc, target);
+            switch (cmd) {
+            case BC_INCREFS:
+                debug_string = "IncRefs";
+                // 增加弱引用计数
+                binder_inc_ref(ref, 0, NULL);
+                break;
+            case BC_ACQUIRE:
+                debug_string = "Acquire";
+                // 增加强引用计数
+                binder_inc_ref(ref, 1, NULL);
+                break;
+            case BC_RELEASE:
+                debug_string = "Release";
+                // 减少强引用计数
+                binder_dec_ref(ref, 1);
+                break;
+            case BC_DECREFS:
+            default:
+                debug_string = "DecRefs";
+                // 减少弱引用计数
+                binder_dec_ref(ref, 0);
+                break;
+            }
+            break;
+        }
+        case BC_INCREFS_DONE:
+        case BC_ACQUIRE_DONE: {
+            void __user *node_ptr;
+            void *cookie;
+            struct binder_node *node;
+            
+            // 从用户空间读取 node_ptr
+            if (get_user(node_ptr, (void * __user *)ptr))
+                return -EFAULT;
+            ptr += sizeof(void *);
+            // 从用户空间读取 cookie
+            if (get_user(cookie, (void * __user *)ptr))
+                return -EFAULT;
+            ptr += sizeof(void *);
+            // 获得节点
+            node = binder_get_node(proc, node_ptr);
+            // 没有找到则返回
+            if (node == NULL) {
+                binder_user_error("binder: %d:%d "
+                    "%s u%p no match\n",
+                    proc->pid, thread->pid,
+                    cmd == BC_INCREFS_DONE ?
+                    "BC_INCREFS_DONE" :
+                    "BC_ACQUIRE_DONE",
+                    node_ptr);
+                break;
+            }
+            // cookie 不匹配则返回
+            if (cookie != node->cookie) {
+                binder_user_error("binder: %d:%d %s u%p node %d"
+                    " cookie mismatch %p != %p\n",
+                    proc->pid, thread->pid,
+                    cmd == BC_INCREFS_DONE ?
+                    "BC_INCREFS_DONE" : "BC_ACQUIRE_DONE",
+                    node_ptr, node->debug_id,
+                    cookie, node->cookie);
+                break;
+            }
+            
+            if (cmd == BC_ACQUIRE_DONE) {
+                node->pending_strong_ref = 0;
+            } else {
+                node->pending_weak_ref = 0;
+            }
+            // 减少节点使用计数
+            binder_dec_node(node, cmd == BC_ACQUIRE_DONE, 0);
+            break;
+        }
 
-    /* If this transaction is inline, the data immediately
-     * follows here; otherwise, it ends with a pointer to
-     * the data buffer.
-     */
-    union {
-        struct {
-            /* transaction data */
-            const void  *buffer;
-            /* offsets from buffer to flat_binder_object structs */
-            const void  *offsets;
-        } ptr;
-        uint8_t buf[8];
-    } data;
-};
+        // 释放 binder_bffer
+        case BC_FREE_BUFFER: {
+            void __user *data_ptr;
+            struct binder_buffer *buffer;
+
+            // 从用户空间获取 data_ptr
+            if (get_user(data_ptr, (void * __user *)ptr))
+                return -EFAULT;
+            ptr += sizeof(void *);
+
+            // 查找 binder_buffer
+            buffer = binder_buffer_lookup(proc, data_ptr);
+            // 没有找到则返回
+            if (buffer == NULL) {
+                binder_user_error("binder: %d:%d "
+                    "BC_FREE_BUFFER u%p no match\n",
+                    proc->pid, thread->pid, data_ptr);
+                break;
+            }
+            // 不允许用户释放则返回
+            if (!buffer->allow_user_free) {
+                binder_user_error("binder: %d:%d "
+                    "BC_FREE_BUFFER u%p matched "
+                    "unreturned buffer\n",
+                    proc->pid, thread->pid, data_ptr);
+                break;
+            }
+
+            // 将 buffer->transaction 置空
+            if (buffer->transaction) {
+                buffer->transaction->buffer = NULL;
+                buffer->transaction = NULL;
+            }
+            if (buffer->async_transaction && buffer->target_node) {
+                if (list_empty(&buffer->target_node->async_todo))
+                    buffer->target_node->has_async_transaction = 0;
+                else
+                    list_move_tail(buffer->target_node->async_todo.next, &thread->todo);
+            }
+            // 释放 binder_buffer 对象
+            trace_binder_transaction_buffer_release(buffer);
+            binder_transaction_buffer_release(proc, buffer, NULL);
+            binder_free_buf(proc, buffer);
+            break;
+        }
+
+        // binder 数据传递处理
+        case BC_TRANSACTION:
+        case BC_REPLY: {
+            struct binder_transaction_data tr;
+
+            // 从用户空间拷贝 binder_transaction_data 对象
+            if (copy_from_user(&tr, ptr, sizeof(tr)))
+                return -EFAULT;
+            ptr += sizeof(tr);
+            // 实际的传输函数，在下文讲解
+            binder_transaction(proc, thread, &tr, cmd == BC_REPLY);
+            break;
+        }
+
+        // 设置 looper 为 BINDER_LOOPER_STATE_REGISTERED 状态
+        case BC_REGISTER_LOOPER:
+            if (thread->looper & BINDER_LOOPER_STATE_ENTERED) {
+                thread->looper |= BINDER_LOOPER_STATE_INVALID;
+                binder_user_error("binder: %d:%d ERROR:"
+                    " BC_REGISTER_LOOPER called "
+                    "after BC_ENTER_LOOPER\n",
+                    proc->pid, thread->pid);
+            } else if (proc->requested_threads == 0) {
+                thread->looper |= BINDER_LOOPER_STATE_INVALID;
+                binder_user_error("binder: %d:%d ERROR:"
+                    " BC_REGISTER_LOOPER called "
+                    "without request\n",
+                    proc->pid, thread->pid);
+            } else {
+                proc->requested_threads--;
+                proc->requested_threads_started++;
+            }
+            thread->looper |= BINDER_LOOPER_STATE_REGISTERED;
+            break;
+        // 设置 looper 为 BINDER_LOOPER_STATE_ENTERED 状态
+        case BC_ENTER_LOOPER:
+            if (thread->looper & BINDER_LOOPER_STATE_REGISTERED) {
+                thread->looper |= BINDER_LOOPER_STATE_INVALID;
+                binder_user_error("binder: %d:%d ERROR:"
+                    " BC_ENTER_LOOPER called after "
+                    "BC_REGISTER_LOOPER\n",
+                    proc->pid, thread->pid);
+            }
+            thread->looper |= BINDER_LOOPER_STATE_ENTERED;
+            break;
+        // 设置 looper 为 BINDER_LOOPER_STATE_EXITED 状态
+        case BC_EXIT_LOOPER:
+            thread->looper |= BINDER_LOOPER_STATE_EXITED;
+            break;
+
+        // 发送 REQUEST_DEATH 或 CLEAR_DEATH 通知
+        case BC_REQUEST_DEATH_NOTIFICATION:
+        case BC_CLEAR_DEATH_NOTIFICATION: {
+            uint32_t target;
+            void __user *cookie;
+            struct binder_ref *ref;
+            struct binder_ref_death *death;
+            
+            // 从用户空间获取 binder_ref 描述 desc
+            if (get_user(target, (uint32_t __user *)ptr))
+                return -EFAULT;
+            ptr += sizeof(uint32_t);
+            // 从用户空间获取 cookie
+            if (get_user(cookie, (void __user * __user *)ptr))
+                return -EFAULT;
+            ptr += sizeof(void *);
+            // 获取 binder_ref 引用
+            ref = binder_get_ref(proc, target);
+            if (ref == NULL) {
+                binder_user_error("binder: %d:%d %s "
+                    "invalid ref %d\n",
+                    proc->pid, thread->pid,
+                    cmd == BC_REQUEST_DEATH_NOTIFICATION ?
+                    "BC_REQUEST_DEATH_NOTIFICATION" :
+                    "BC_CLEAR_DEATH_NOTIFICATION",
+                    target);
+                break;
+            }
+
+            if (cmd == BC_REQUEST_DEATH_NOTIFICATION) {
+                if (ref->death) {
+                    binder_user_error("binder: %d:%"
+                        "d BC_REQUEST_DEATH_NOTI"
+                        "FICATION death notific"
+                        "ation already set\n",
+                        proc->pid, thread->pid);
+                    break;
+                }
+                // 为 binder_ref_death 对象分配内存空间
+                death = kzalloc(sizeof(*death), GFP_KERNEL);
+                if (death == NULL) {
+                    thread->return_error = BR_ERROR;
+                    break;
+                }
+                // 初始化 binder_ref_death 对象
+                binder_stats_created(BINDER_STAT_DEATH);
+                INIT_LIST_HEAD(&death->work.entry);
+                death->cookie = cookie;
+                ref->death = death;
+                if (ref->node->proc == NULL) {
+                    ref->death->work.type = BINDER_WORK_DEAD_BINDER;
+                    if (thread->looper & (BINDER_LOOPER_STATE_REGISTERED | BINDER_LOOPER_STATE_ENTERED)) {
+                        list_add_tail(&ref->death->work.entry, &thread->todo);
+                    } else {
+                        list_add_tail(&ref->death->work.entry, &proc->todo);
+                        // 唤醒目标进程
+                        wake_up_interruptible(&proc->wait);
+                    }
+                }
+            } else {
+                if (ref->death == NULL) {
+                    binder_user_error("binder: %d:%"
+                        "d BC_CLEAR_DEATH_NOTIFI"
+                        "CATION death notificat"
+                        "ion not active\n",
+                        proc->pid, thread->pid);
+                    break;
+                }
+                death = ref->death;
+                if (death->cookie != cookie) {
+                    binder_user_error("binder: %d:%"
+                        "d BC_CLEAR_DEATH_NOTIFI"
+                        "CATION death notificat"
+                        "ion cookie mismatch "
+                        "%p != %p\n",
+                        proc->pid, thread->pid,
+                        death->cookie, cookie);
+                    break;
+                }
+                // 将 ref->death 置空
+                ref->death = NULL;
+                if (list_empty(&death->work.entry)) {
+                    death->work.type = BINDER_WORK_CLEAR_DEATH_NOTIFICATION;
+                    if (thread->looper & (BINDER_LOOPER_STATE_REGISTERED | BINDER_LOOPER_STATE_ENTERED)) {
+                        list_add_tail(&death->work.entry, &thread->todo);
+                    } else {
+                        list_add_tail(&death->work.entry, &proc->todo);
+                        // 唤醒目标进程
+                        wake_up_interruptible(&proc->wait);
+                    }
+                } else {
+                    BUG_ON(death->work.type != BINDER_WORK_DEAD_BINDER);
+                    death->work.type = BINDER_WORK_DEAD_BINDER_AND_CLEAR;
+                }
+            }
+        } break;
+        case BC_DEAD_BINDER_DONE: {
+            struct binder_work *w;
+            void __user *cookie;
+            struct binder_ref_death *death = NULL;
+            // 从用户空间获取 cookie
+            if (get_user(cookie, (void __user * __user *)ptr))
+                return -EFAULT;
+
+            ptr += sizeof(void *);
+            list_for_each_entry(w, &proc->delivered_death, entry) {
+                struct binder_ref_death *tmp_death = container_of(w, struct binder_ref_death, work);
+                if (tmp_death->cookie == cookie) {
+                    death = tmp_death;
+                    break;
+                }
+            }
+            if (death == NULL) {
+                binder_user_error("binder: %d:%d BC_DEAD"
+                    "_BINDER_DONE %p not found\n",
+                    proc->pid, thread->pid, cookie);
+                break;
+            }
+
+            list_del_init(&death->work.entry);
+            // 如果 death->work.t 为 BINDER_WORK_DEAD_BINDER_AND_CLEAR 则修改为 BINDER_WORK_CLEAR_DEATH_NOTIFICATION
+            if (death->work.t == BINDER_WORK_DEAD_BINDER_AND_CLEAR ) {
+                death->work.type = BINDER_WORK_CLEAR_DEATH_NOTIFICATION;
+                if (thread->looper & (BINDER_LOOPER_STATE_REGISTERED | BINDER_LOOPER_STATE_ENTERED)) {
+                    list_add_tail(&death->work.entry, &thread->todo);
+                } else {
+                    list_add_tail(&death->work.entry, &proc->todo);
+                    // 唤醒目标进程
+                    wake_up_interruptible(&proc->wait);
+                }
+            }
+        } break;
+
+        default:
+            return -EINVAL;
+        }
+        *consumed = ptr - buffer;
+    }
+    return 0;
+}
 ```
+
+**binder_transaction() 函数**
+
+在上文处理 [BC_TRANSACTION](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L2041) 和 [BC_REPLY](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L2042) 时，调用了 [binder_transaction()](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.c#L1417) 函数。我们继续追踪
+
+```c
+static void binder_transaction(struct binder_proc *proc,
+                   struct binder_thread *thread,
+                   struct binder_transaction_data *tr, int reply)
+{
+    struct binder_transaction *t;
+    struct binder_work *tcomplete;
+    size_t *offp, *off_end;
+    struct binder_proc *target_proc;
+    struct binder_thread *target_thread = NULL;
+    struct binder_node *target_node = NULL;
+    struct list_head *target_list;
+    wait_queue_head_t *target_wait;
+    struct binder_transaction *in_reply_to = NULL;
+    
+    if (reply) {
+        // BC_REPLY 处理流程
+        // 得到 binder_transaction 对象
+        in_reply_to = thread->transaction_stack;
+        if (in_reply_to == NULL) {
+            return_error = BR_FAILED_REPLY;
+            goto err_empty_call_stack;
+        }
+        binder_set_nice(in_reply_to->saved_priority);
+        thread->transaction_stack = in_reply_to->to_parent;
+        // 获取目标线程
+        target_thread = in_reply_to->from;
+        target_proc = target_thread->proc;
+    } else {
+        // BC_TRANSACTION 处理流程
+        // 查找目标节点
+        if (tr->target.handle) {
+            struct binder_ref *ref;
+            // 获取 binder_ref 对象
+            ref = binder_get_ref(proc, tr->target.handle);
+            target_node = ref->node;
+        } else {
+            // 索引为 0 则返回 context manager
+            target_node = binder_context_mgr_node;
+        }
+        // 得到目标进程
+        target_proc = target_node->proc;
+        if (!(tr->flags & TF_ONE_WAY) && thread->transaction_stack) {
+            struct binder_transaction *tmp;
+            tmp = thread->transaction_stack;
+            while (tmp) {
+                if (tmp->from && tmp->from->proc == target_proc)
+                    // 获得目标线程
+                    target_thread = tmp->from;
+                tmp = tmp->from_parent;
+            }
+        }
+    }
+    // 设置要处理的目标进程或目标线程任务
+    if (target_thread) {
+        target_list = &target_thread->todo;
+        target_wait = &target_thread->wait;
+    } else {
+        target_list = &target_proc->todo;
+        target_wait = &target_proc->wait;
+    }
+
+    // 为 binder_transaction 对象分配内存空间
+    t = kzalloc(sizeof(*t), GFP_KERNEL);
+    binder_stats_created(BINDER_STAT_TRANSACTION);
+
+    tcomplete = kzalloc(sizeof(*tcomplete), GFP_KERNEL);
+    binder_stats_created(BINDER_STAT_TRANSACTION_COMPLETE);
+
+    // 如果是同步传输(双向)，则将当前的 binder_thread 对象保存在 binder_transaction 对象的 from 中。
+    if (!reply && !(tr->flags & TF_ONE_WAY))
+        t->from = thread;
+    else
+        t->from = NULL;
+    // 设置 binder_transaction 对象
+    t->sender_euid = proc->tsk->cred->euid;
+    t->to_proc = target_proc;
+    t->to_thread = target_thread;
+    t->code = tr->code;
+    t->flags = tr->flags;
+    t->priority = task_nice(current);
+
+    // 为 binder_buffer 分配内存空间
+    t->buffer = binder_alloc_buf(target_proc, tr->data_size,
+        tr->offsets_size, !reply && (t->flags & TF_ONE_WAY));
+    // 设置 binder_buffer
+    t->buffer->allow_user_free = 0;
+    t->buffer->debug_id = t->debug_id;
+    t->buffer->transaction = t;
+    t->buffer->target_node = target_node;
+    if (target_node)
+        binder_inc_node(target_node, 1, 0, NULL);
+
+    offp = (size_t *)(t->buffer->data + ALIGN(tr->data_size, sizeof(void *)));
+
+    // 从用户空间拷贝数据到 binder_buffer
+    if (copy_from_user(t->buffer->data, tr->data.ptr.buffer, tr->data_size)) {
+        return_error = BR_FAILED_REPLY;
+        goto err_copy_data_failed;
+    }
+    if (copy_from_user(offp, tr->data.ptr.offsets, tr->offsets_size)) {
+        return_error = BR_FAILED_REPLY;
+        goto err_copy_data_failed;
+    }
+
+    off_end = (void *)offp + tr->offsets_size;
+    for (; offp < off_end; offp++) {
+        struct flat_binder_object *fp;
+        // 为 flat_binder_object 赋值
+        fp = (struct flat_binder_object *)(t->buffer->data + *offp);
+        // 转换 binder 类型，如果是 BINDER 则转换为 HANDLE， 如果是 HANDLE 则转为 BANDLE
+        switch (fp->type) {
+        case BINDER_TYPE_BINDER:
+        case BINDER_TYPE_WEAK_BINDER: {
+            struct binder_ref *ref;
+            // 获取 binder_node 节点
+            struct binder_node *node = binder_get_node(proc, fp->binder);
+            if (node == NULL) {
+                node = binder_new_node(proc, fp->binder, fp->cookie);
+                if (node == NULL) {
+                    return_error = BR_FAILED_REPLY;
+                    goto err_binder_new_node_failed;
+                }
+                node->min_priority = fp->flags & FLAT_BINDER_FLAG_PRIORITY_MASK;
+                node->accept_fds = !!(fp->flags & FLAT_BINDER_FLAG_ACCEPTS_FDS);
+            }
+            if (fp->cookie != node->cookie) {
+                goto err_binder_get_ref_for_node_failed;
+            }
+            // 获取 binder_ref 对象
+            ref = binder_get_ref_for_node(target_proc, node);
+            // 转换类型
+            if (fp->type == BINDER_TYPE_BINDER)
+                fp->type = BINDER_TYPE_HANDLE;
+            else
+                fp->type = BINDER_TYPE_WEAK_HANDLE;
+            fp->handle = ref->desc;
+            binder_inc_ref(ref, fp->type == BINDER_TYPE_HANDLE,
+                       &thread->todo);
+        } break;
+        case BINDER_TYPE_HANDLE:
+        case BINDER_TYPE_WEAK_HANDLE: {
+            // 获取 binder_ref 对象
+            struct binder_ref*ref = binder_get_ref(proc, fp->handle);
+            // 转换类型
+            if (ref->node->proc == target_proc) {
+                if (fp->type == BINDER_TYPE_HANDLE)
+                    fp->type = BINDER_TYPE_BINDER;
+                else
+                    fp->type = BINDER_TYPE_WEAK_BINDER;
+                fp->binder = ref->node->ptr;
+                fp->cookie = ref->node->cookie;
+                binder_inc_node(ref->node, fp->type == BINDER_TYPE_BINDER, 0, NULL);
+            } else {
+                struct binder_ref *new_ref;
+                new_ref = binder_get_ref_for_node(target_proc, ref->node);
+                fp->handle = new_ref->desc;
+                binder_inc_ref(new_ref, fp->type == BINDER_TYPE_HANDLE, NULL);
+            }
+        } break;
+
+        // 文件类型
+        case BINDER_TYPE_FD: {
+            int target_fd;
+            struct file *file;
+            // 获得文件对象
+            file = fget(fp->handle);
+            // 分配一个新的文件描述符
+            target_fd = task_get_unused_fd_flags(target_proc, O_CLOEXEC);
+            task_fd_install(target_proc, target_fd, file);
+            fp->handle = target_fd;
+        } break;
+
+        default:
+            return_error = BR_FAILED_REPLY;
+            goto err_bad_object_type;
+        }
+    }
+    if (reply) {
+        // BC_REPLY 处理流程, binder_transaction 中释放 binder_transaction 对象
+        binder_pop_transaction(target_thread, in_reply_to);
+    } else if (!(t->flags & TF_ONE_WAY)) {
+        // 同步状态(双向)需要设置回复
+        t->need_reply = 1;
+        t->from_parent = thread->transaction_stack;
+        thread->transaction_stack = t;
+    } else {
+        // 异步传输不需要设置回复
+        if (target_node->has_async_transaction) {
+            target_list = &target_node->async_todo;
+            target_wait = NULL;
+        } else
+            target_node->has_async_transaction = 1;
+    }
+    t->work.type = BINDER_WORK_TRANSACTION;
+    list_add_tail(&t->work.entry, target_list);
+    tcomplete->type = BINDER_WORK_TRANSACTION_COMPLETE;
+    list_add_tail(&tcomplete->entry, &thread->todo);
+    if (target_wait)
+        // 唤醒目标线程
+        wake_up_interruptible(target_wait);
+    return;
+}
+```
+
+**数据读取 - binder_thread_read() 函数**
+
+用户空间从 binder 驱动读取数据，从驱动角度来看是写出的操作。
+
+```c
+static int binder_thread_read(struct binder_proc *proc,
+                  struct binder_thread *thread,
+                  void  __user *buffer, int size,
+                  signed long *consumed, int non_block)
+{
+    void __user *ptr = buffer + *consumed;
+    void __user *end = buffer + size;
+
+    int ret = 0;
+    int wait_for_proc_work;
+
+    if (*consumed == 0) {
+        // 第一次操作时向用户空间返回 BR_NOOP 命令
+        if (put_user(BR_NOOP, (uint32_t __user *)ptr))
+            return -EFAULT;
+        ptr += sizeof(uint32_t);
+    }
+
+retry:
+    // 获取将要处理的任务
+    wait_for_proc_work = thread->transaction_stack == NULL &&
+                list_empty(&thread->todo);
+    if (wait_for_proc_work) {
+        if (!(thread->looper & (BINDER_LOOPER_STATE_REGISTERED |
+                    BINDER_LOOPER_STATE_ENTERED))) {
+            binder_user_error("binder: %d:%d ERROR: Thread waiting "
+                "for process work before calling BC_REGISTER_"
+                "LOOPER or BC_ENTER_LOOPER (state %x)\n",
+                proc->pid, thread->pid, thread->looper);
+            wait_event_interruptible(binder_user_error_wait,
+                         binder_stop_on_user_error < 2);
+        }
+        binder_set_nice(proc->default_priority);
+        if (non_block) {
+            // 非阻塞且没有数据则返回 EAGAIN
+            if (!binder_has_proc_work(proc, thread))
+                ret = -EAGAIN;
+        } else
+            // 阻塞则进入睡眠状态，等待可操作的任务
+            ret = wait_event_freezable_exclusive(proc->wait, binder_has_proc_work(proc, thread));
+    } else {
+        if (non_block) {
+            if (!binder_has_thread_work(thread))
+                ret = -EAGAIN;
+        } else
+            ret = wait_event_freezable(thread->wait, binder_has_thread_work(thread));
+    }
+
+    binder_lock(__func__);
+
+    if (wait_for_proc_work)
+        proc->ready_threads--;
+    thread->looper &= ~BINDER_LOOPER_STATE_WAITING;
+
+    if (ret)
+        return ret;
+
+    while (1) {
+        uint32_t cmd;
+        struct binder_transaction_data tr;
+        struct binder_work *w;
+        struct binder_transaction *t = NULL;
+
+        // 获取 binder_work 对象
+        if (!list_empty(&thread->todo))
+            w = list_first_entry(&thread->todo, struct binder_work, entry);
+        else if (!list_empty(&proc->todo) && wait_for_proc_work)
+            w = list_first_entry(&proc->todo, struct binder_work, entry);
+        else {
+            if (ptr - buffer == 4 && !(thread->looper & BINDER_LOOPER_STATE_NEED_RETURN)) /* no data added */
+                goto retry;
+            break;
+        }
+
+        if (end - ptr < sizeof(tr) + 4)
+            break;
+
+        switch (w->type) {
+        case BINDER_WORK_TRANSACTION: {
+            // 获取 binder_transaction 对象
+            t = container_of(w, struct binder_transaction, work);
+        } break;
+        case BINDER_WORK_TRANSACTION_COMPLETE: {
+            cmd = BR_TRANSACTION_COMPLETE;
+            // 返回 BR_TRANSACTION_COMPLETE 命令
+            if (put_user(cmd, (uint32_t __user *)ptr))
+                return -EFAULT;
+            ptr += sizeof(uint32_t);
+
+            binder_stat_br(proc, thread, cmd);
+
+            // 从 work 链表中删除并释放内存
+            list_del(&w->entry);
+            kfree(w);
+            binder_stats_deleted(BINDER_STAT_TRANSACTION_COMPLETE);
+        } break;
+        case BINDER_WORK_NODE: {
+            // 获得 binder_node 节点
+            struct binder_node *node = container_of(w, struct binder_node, work);
+            uint32_t cmd = BR_NOOP;
+            const char *cmd_name;
+            // 根据节点类型，增加/获取、减少/释放节点索引
+            int strong = node->internal_strong_refs || node->local_strong_refs;
+            int weak = !hlist_empty(&node->refs) || node->local_weak_refs || strong;
+            // 构造 BR_* 命令
+            if (weak && !node->has_weak_ref) {
+                cmd = BR_INCREFS;
+                cmd_name = "BR_INCREFS";
+                node->has_weak_ref = 1;
+                node->pending_weak_ref = 1;
+                node->local_weak_refs++;
+            } else if (strong && !node->has_strong_ref) {
+                cmd = BR_ACQUIRE;
+                cmd_name = "BR_ACQUIRE";
+                node->has_strong_ref = 1;
+                node->pending_strong_ref = 1;
+                node->local_strong_refs++;
+            } else if (!strong && node->has_strong_ref) {
+                cmd = BR_RELEASE;
+                cmd_name = "BR_RELEASE";
+                node->has_strong_ref = 0;
+            } else if (!weak && node->has_weak_ref) {
+                cmd = BR_DECREFS;
+                cmd_name = "BR_DECREFS";
+                node->has_weak_ref = 0;
+            }
+            // 向用户空间返回命令
+            if (cmd != BR_NOOP) {
+                if (put_user(cmd, (uint32_t __user *)ptr))
+                    return -EFAULT;
+                ptr += sizeof(uint32_t);
+                if (put_user(node->ptr, (void * __user *)ptr))
+                    return -EFAULT;
+                ptr += sizeof(void *);
+                if (put_user(node->cookie, (void * __user *)ptr))
+                    return -EFAULT;
+                ptr += sizeof(void *);
+
+                binder_stat_br(proc, thread, cmd);
+            } else {
+                list_del_init(&w->entry);
+                if (!weak && !strong) {
+                    rb_erase(&node->rb_node, &proc->nodes);
+                    kfree(node);
+                    binder_stats_deleted(BINDER_STAT_NODE);
+                }
+            }
+        } break;
+        case BINDER_WORK_DEAD_BINDER:
+        case BINDER_WORK_DEAD_BINDER_AND_CLEAR:
+        case BINDER_WORK_CLEAR_DEATH_NOTIFICATION: {
+            struct binder_ref_death *death;
+            uint32_t cmd;
+
+            // 获取 binder_ref_death 对象
+            death = container_of(w, struct binder_ref_death, work);
+            // 构造返回命令
+            if (w->type == BINDER_WORK_CLEAR_DEATH_NOTIFICATION)
+                cmd = BR_CLEAR_DEATH_NOTIFICATION_DONE;
+            else
+                cmd = BR_DEAD_BINDER;
+            // 向用户空间返回命令
+            if (put_user(cmd, (uint32_t __user *)ptr))
+                return -EFAULT;
+            ptr += sizeof(uint32_t);
+            // 将 cookie 返回给用户空间
+            if (put_user(death->cookie, (void * __user *)ptr))
+                return -EFAULT;
+            ptr += sizeof(void *);
+            binder_stat_br(proc, thread, cmd);
+
+            if (w->type == BINDER_WORK_CLEAR_DEATH_NOTIFICATION) {
+                list_del(&w->entry);
+                kfree(death);
+                binder_stats_deleted(BINDER_STAT_DEATH);
+            } else
+                list_move(&w->entry, &proc->delivered_death);
+            if (cmd == BR_DEAD_BINDER)
+                goto done; /* DEAD_BINDER notifications can cause transactions */
+        } break;
+        }
+
+        if (!t)
+            continue;
+
+        if (t->buffer->target_node) {
+            // 获得 binder_node 节点
+            struct binder_node *target_node = t->buffer->target_node;
+            // 将数据封装到 binder_transaction_data 对象
+            tr.target.ptr = target_node->ptr;
+            tr.cookie =  target_node->cookie;
+            t->saved_priority = task_nice(current);
+            if (t->priority < target_node->min_priority &&
+                !(t->flags & TF_ONE_WAY))
+                binder_set_nice(t->priority);
+            else if (!(t->flags & TF_ONE_WAY) ||
+                 t->saved_priority > target_node->min_priority)
+                binder_set_nice(target_node->min_priority);
+            // 设置返回的命令类型
+            cmd = BR_TRANSACTION;
+        } else {
+            tr.target.ptr = NULL;
+            tr.cookie = NULL;
+            cmd = BR_REPLY;
+        }
+        tr.code = t->code;
+        tr.flags = t->flags;
+        tr.sender_euid = t->sender_euid;
+
+        if (t->from) {
+            struct task_struct *sender = t->from->proc->tsk;
+            tr.sender_pid = task_tgid_nr_ns(sender,
+                            current->nsproxy->pid_ns);
+        } else {
+            tr.sender_pid = 0;
+        }
+
+        tr.data_size = t->buffer->data_size;
+        tr.offsets_size = t->buffer->offsets_size;
+        tr.data.ptr.buffer = (void *)t->buffer->data +
+                    proc->user_buffer_offset;
+        tr.data.ptr.offsets = tr.data.ptr.buffer +
+                    ALIGN(t->buffer->data_size,
+                        sizeof(void *));
+
+        if (put_user(cmd, (uint32_t __user *)ptr))
+            return -EFAULT;
+        ptr += sizeof(uint32_t);
+        // 拷贝 binder_transaction_data 对象到用户空间
+        if (copy_to_user(ptr, &tr, sizeof(tr)))
+            return -EFAULT;
+        ptr += sizeof(tr);
+
+        binder_stat_br(proc, thread, cmd);
+
+        // 移除 binder_transaction 并释放空间
+        list_del(&t->work.entry);
+        t->buffer->allow_user_free = 1;
+        // 如果是同步操作，则将 thread 对象保存在 binder_transaction 中，返回给发送方进程, 否则释放 binder_transaction 对象
+        if (cmd == BR_TRANSACTION && !(t->flags & TF_ONE_WAY)) {
+            t->to_parent = thread->transaction_stack;
+            t->to_thread = thread;
+            thread->transaction_stack = t;
+        } else {
+            t->buffer->transaction = NULL;
+            kfree(t);
+            binder_stats_deleted(BINDER_STAT_TRANSACTION);
+        }
+        break;
+    }
+}
+```
+从上述代码可以看出 binder 驱动的具体实现，以及是如何发送和接收数据的。
 
 ## 5. Binder 与系统服务
 
@@ -1212,37 +2390,12 @@ Android 系统在启动后会在后台运行很多系统服务提供给应用使
 
 可以看到，系统服务的获取方式也是通过 AIDL 的方式实现的。
 
-
-## 6. 背景
-
-**为什么需要进程间通信？**
-
-我们知道一般每个 APP 在运行时都是一个进程，而每个进程相互独立不能直接操作其他进程的数据，两个独立的进程要进行数据交互，就需要系统提供进程间通信机制。
-
-比如 APP 运行在自己的进程中，系统的媒体播放器运行在另一进程中，APP 要操作媒体播放服务 (MediaPlayerService)，就需要通过进程间通信来管理 媒体播放器 (MediaPlayer)。
-
-举一个现实中例子： 我乘坐 101 路公交车 到 A 站后下车，再乘坐 800 路公交车。 如果 101、800 公交线路比作两个进程，那么 `101开车门->下车->等待->800开车门->上车` 这一系列动作就可以看作是进程间通信，而我自身则是传递的数据。
-
-*扩展阅读 [进程与线程的一个简单解释](http://www.ruanyifeng.com/blog/2013/04/processes_and_threads.html)*
-
-**为什么进程是孤立的？**
-
-为了安全，一个进程一定不能操作其他进程的数据。在 `Linux` 系统中，虚拟内存机制为每一个进程分配一块线性且连续的内存空间，这块空间被操作系统映射到物理内存中。
-
-每一个进程拥有自己独立的虚拟内存空间，它只能操作自己的虚拟内存，这样它就不能操作其他进程的内存数据。只有操作系统可以访问物理内存。
-
-进程的孤立保证了每个进程的内存安全，但是很多情况下都需要进程间的通信，所以需要操作系统提供一种机制来实现进程间通信。`Binder` 就是 Android 系统提供的进程间通信机制。
-
-**什么是用户空间和内核空间？**
-
-
-## 7. 结论
+## 6. 结论
 
 1\. AIDL 本质上只是一个用于封装 Binder 操作的工具，最终的进程间通信由 Binder 的 `transact` 和 `onTransact` 完成。
 
 
-
-## 8. 参考
+## 7. 参考
 
 [Android Binder机制](http://wangkuiwu.github.io/2014/09/01/Binder-Introduce/)
 
@@ -1271,3 +2424,18 @@ Android 系统在启动后会在后台运行很多系统服务提供给应用使
 [Android Binder](https://web.archive.org/web/20101016004342/http://www.gmier.com/node/11)
 
 [Binder机制，从Java到C （7. Native Service）](http://www.cnblogs.com/zhangxinyan/p/3487889.html)
+
+
+----------------------------
+
+**待补充的内容**
+
+1\. 客户端 bindService() 流程及源码分析
+
+2\. Binder Native 层其他源码文件分析
+
+3\. 系统服务（SystemService）详细列表及在本地层的源码分析
+
+4\. SystemManager 源码分析
+
+5\. 完善 binder 驱动内容，补充关系图
