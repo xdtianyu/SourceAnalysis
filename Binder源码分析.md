@@ -15,7 +15,7 @@
   - [3.3 Binder 设备文件的打开和读写](#33-binder-%E8%AE%BE%E5%A4%87%E6%96%87%E4%BB%B6%E7%9A%84%E6%89%93%E5%BC%80%E5%92%8C%E8%AF%BB%E5%86%99)
 - [4. Binder 驱动](#4-binder-%E9%A9%B1%E5%8A%A8)
   - [4.1 binder 设备的创建](#41-binder-%E8%AE%BE%E5%A4%87%E7%9A%84%E5%88%9B%E5%BB%BA)
-  - [4.2 binder协议和数据结构](#42-binder%E5%8D%8F%E8%AE%AE%E5%92%8C%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84)
+  - [4.2 binder 协议和数据结构](#42-binder-%E5%8D%8F%E8%AE%AE%E5%92%8C%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84)
   - [4.3 binder 驱动文件操作](#43-binder-%E9%A9%B1%E5%8A%A8%E6%96%87%E4%BB%B6%E6%93%8D%E4%BD%9C)
 - [5. Binder 与系统服务](#5-binder-%E4%B8%8E%E7%B3%BB%E7%BB%9F%E6%9C%8D%E5%8A%A1)
   - [5.1 Context.getSystemService()](#51-contextgetsystemservice)
@@ -343,6 +343,8 @@ public int bindService(IApplicationThread caller, IBinder token,
 再从 `onServiceConnected()` 回调追踪， [onServiceConnected()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/LoadedApk.java#L1223) 是由 [LoadedApk.ServiceDispatcher.doConnected()](https://github.com/xdtianyu/android-6.0.0_r1/blob/master/frameworks/base/core/java/android/app/LoadedApk.java#L1175) 回调的。
 
 *关于更多的 `bindService()` 远程服务创建及 `ServiceConnection` 回调， 请参考 [Android应用程序绑定服务（bindService）的过程源代码分析](http://blog.csdn.net/luoshengyang/article/details/6745181)*
+
+*利用进程间通信，我们可以实现简单的应用插件功能。关于 AIDL 在实际项目中的应用，可以参考 [CallerInfo Plugin](https://github.com/xdtianyu/CallerInfo/tree/master/plugin/src/main) 的实现 *
 
 从上面分析可以看出， AIDL 的本质是对 Binder 的又一次抽象和封装，实际的进程间通信仍是由 Binder 完成的。
 
@@ -1034,7 +1036,7 @@ static const struct file_operations binder_fops = {
 ```
 从上面 `binder_fops` 结构体可以看出，主要的操作是 `binder_ioctl()` `binder_mmap()` `binder_open()` 等函数实现的。
 
-### 4.2 binder协议和数据结构
+### 4.2 binder 协议和数据结构
 
 [binder.h](https://github.com/xdtianyu/android-msm-hammerhead-3.4-marshmallow/blob/master/drivers/staging/android/binder.h) 文件中定义了 binder 协议和重要的数据结构。
 
@@ -2392,7 +2394,11 @@ Android 系统在启动后会在后台运行很多系统服务提供给应用使
 
 ## 6. 结论
 
-1\. AIDL 本质上只是一个用于封装 Binder 操作的工具，最终的进程间通信由 Binder 的 `transact` 和 `onTransact` 完成。
+1\. Binder 的实现涉及到 kernel 驱动，本地层，JNI 和应用层，贯穿了整个 Ａndroid 系统。系统服务获取、Activity/Service 启动、Intent的传递等都离不开 binder,要掌握 binder 的原理需要深入到系统的每一层代码。
+
+2\. 上层的 `android.os.Binder` 只是对 binder 的又一次抽象封装，我们在应用中一般也不会直接使用。
+
+3\. AIDL 本质上是一个用于封装 Binder 操作的工具，最终的进程间通信由 Binder 的 `transact` 和 `onTransact` 完成。我们在应用中实现 AIDL 接口，可以快速实现进程间通信。
 
 
 ## 7. 参考
